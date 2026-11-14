@@ -59,6 +59,7 @@ Each Source's Policy has an admission table. Its rows are receiving scopes:
 
 - **Feishu:** each configured chat, other chats the bot receives mentions from, and direct messages. Other chats are received only when **其他群** is set to **仅 @** on the Feishu card.
 - **GitHub:** new Issues, new pull requests, comments and the default branch's CI.
+- **Gitee:** new Issues, new pull requests and comments in its independent repository.
 
 A row has up to three cells. Each cell decides whether a message becomes an explicit request, an inferred candidate or nothing:
 

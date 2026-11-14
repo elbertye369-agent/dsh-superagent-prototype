@@ -63,7 +63,8 @@ export function DeploymentPage({ setup, form, accounts: showAccounts }: { setup:
       </div>}
       {showAccounts && <Section title={t('deploymentDerived')} hint={t('deploymentDerivedHint')}>
         <KeyValues rows={[[t('deploymentRepository'), accounts?.repository ?? '—'],
-          [t('deploymentAgent'), accounts ? `@${accounts.agent}` : '—'], [t('deploymentFeishu'), feishu]]} />
+          [t('deploymentAgent'), accounts ? `@${accounts.agent}` : '—'],
+          ['Gitee', accounts?.gitee ? `@${accounts.gitee.agent} · ${accounts.gitee.repository}` : '—'], [t('deploymentFeishu'), feishu]]} />
         <Hint>{t('deploymentAccountsWhere')}</Hint>
       </Section>}
       <Section title={t('deploymentMachine')}>

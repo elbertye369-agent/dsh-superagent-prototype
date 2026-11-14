@@ -16,8 +16,12 @@ interface Jobs {
 /** What the Executor uses of DSH's subagents: joining a worker's subagents that work, its subagents, and releasing them. */
 interface Subagents {
   waitForChildren(parent: Agent): Promise<boolean>
-  listChildren(parentSessionId: string): Promise<readonly { id: string }[]>
+  listChildren(parentSessionId: string): Promise<readonly { id: string; mode?: string }[]>
   drainChildren(parent: Agent, childIds: readonly string[]): Promise<void>
+}
+/** Public lifecycle event shared by local and external DSH children; no dependency on a backend's private registry. */
+interface SubagentEvents {
+  on(name: 'subagent/end', listener: (info: { id: string }) => void): () => void
 }
 /** How long a stop waits for a killed job to end, collecting its end so the worker is not woken to hear of it. */
 const KILL_WAIT_MS = 10_000
@@ -141,15 +145,33 @@ export async function collectJob(ctx: Context, sessionId: string, job: { id: str
 export async function stopSubagents(ctx: Context, agent: Agent, keepInbox = false): Promise<void> {
   const subagents = subagentsOf(ctx)
   if (!subagents) return
-  // The catalog lists every subagent the Session had; one that ended has no agent.
-  const live = (await subagents.listChildren(agent.id)).map(child => child.id).filter(id => ctx.agents.get(id as SessionId))
-  if (!live.length) return
-  try { await until(subagents.drainChildren(agent, live), undefined, DRAIN_LIMIT_MS) }
-  finally {
-    if (agent.status !== 'idle') cancelled.add(agent)
-    agent.cancel({ kind: 'user' }, { keepInbox })
-    await until(agent.whenIdle(), undefined, DRAIN_LIMIT_MS)
-  }
+  // External children have no local Agent, and their durable catalog also contains completed runs. The public terminal
+  // event follows parent result delivery and precedes drain completion: it proves that this stop could wake the parent.
+  // Subscribe before reading the catalog so a child settling during that read is not missed.
+  const ended = new Set<string>()
+  const unsubscribe = (ctx as unknown as SubagentEvents).on('subagent/end', info => { ended.add(info.id) })
+  try {
+    const children = await subagents.listChildren(agent.id)
+    const local = children.filter(child => ctx.agents.get(child.id as SessionId)).map(child => child.id)
+    const selected = [...new Set([...local, ...children.filter(child => child.mode === 'external').map(child => child.id)])]
+    if (!selected.length) return
+    let cancelParent = local.length > 0
+    try {
+      const drained = await until(subagents.drainChildren(agent, selected), undefined, DRAIN_LIMIT_MS)
+      cancelParent ||= drained === false || selected.some(id => ended.has(id))
+    } catch (error) {
+      // Preserve bounded-stop behavior when teardown failed: it cannot prove that no child will wake the parent.
+      cancelParent = true
+      throw error
+    } finally {
+      // A completed external run is a drain no-op. Do not abort the parent's current report merely because it is listed.
+      if (cancelParent) {
+        if (agent.status !== 'idle') cancelled.add(agent)
+        agent.cancel({ kind: 'user' }, { keepInbox })
+        await until(agent.whenIdle(), undefined, DRAIN_LIMIT_MS)
+      }
+    }
+  } finally { unsubscribe() }
 }
 
 /**

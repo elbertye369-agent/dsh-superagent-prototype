@@ -249,7 +249,7 @@ Each model request binds the Session to the current prompt revision. The revisio
 | `src/app/tools/main.ts`, `src/app/tools/executor.ts` | Tool arguments of the main Session and the Executor Sessions into calls of the core classes, and their results into cards |
 | `src/app/http.ts`, `src/app/views/`, `src/app/api.ts` | HTTP requests into calls, and Store reads into the panel's views; `api.ts` types every route for the panel |
 | `src/app/resources.ts`, `src/app/links.ts`, `src/app/cards.ts` | Resource names into reads, source messages into links, records into compact cards for models |
-| `src/sources/github*.ts`, `src/sources/feishu*.ts`, `src/sources/poll.ts` | GitHub and Feishu payloads into Triggers and Thread facts, and messages into CLI calls |
+| `src/sources/github*.ts`, `src/sources/gitee*.ts`, `src/sources/feishu*.ts`, `src/sources/poll.ts` | GitHub, Gitee and Feishu payloads into Triggers and Thread facts, and messages into CLI calls |
 | `src/deployment.ts`, `src/setup.ts`, `src/infra/` | Setup probes and problems, CLI transport, the agent's process environment |
 
 ## Dependency rules
@@ -274,16 +274,16 @@ Each model request binds the Session to the current prompt revision. The revisio
 - **Fixed refusals.** A refusal a person or an agent can cause is a `UserError(code, values)` from `USER_ERRORS` in `src/core/errors.ts`. The management API answers a `missing` code with 404 and the others with 400, and the panel words each code in its language. Setup problems are `SetupError` codes (`src/setup.ts`) and fixed health texts `HealthCode`s (`src/sources/host.ts`), worded the same way.
 ### Source-specific dependencies
 
-Some generic modules still refer directly to GitHub or Feishu:
+Some generic modules still refer directly to GitHub, Gitee or Feishu:
 
 - Outbox applies the Feishu chat word limit.
 - `src/app/links.ts` resolves Feishu message links and `repliedTo`. It and Runtime read settings with `feishuSettings`.
-- `src/app/resources.ts` reads the `feishu/` and `github/` originals; `src/app/cards.ts` uses `pullOf` for Ticket cards.
-- Runtime sends `pullEndNotices` for merged or closed Tickets.
-- Executor tools bind reported pull requests with `readPull` and `claimPull`, using the GitHub context exposed by Runtime.
-- MasterAssessor reads repository files with `readRepositoryPath`.
-- Sessions and Prompts register built-in skills only for GitHub and Feishu. Migration converts their schema-10 records.
-- Setup probes only GitHub and Feishu account fields (`SETUP_FIELDS`). Only those Sources receive account setup problems through `SourceContext.problem`.
+- `src/app/resources.ts` reads the `feishu/`, `github/` and `gitee/` originals; `src/app/cards.ts` uses the two Sources' `pullOf` functions for Ticket cards.
+- Runtime sends GitHub and Gitee PR terminal notices for merged or closed Tickets.
+- Executor tools bind reported pull requests with the Source selected by `pr_source`, using the GitHub or Gitee context exposed by Runtime.
+- MasterAssessor reads repository files from the candidate Trigger's GitHub or Gitee repository.
+- Sessions and Prompts register built-in skills for GitHub, Gitee and Feishu. Migration converts their schema-10 records.
+- Setup probes GitHub, optional Gitee and Feishu account fields (`SETUP_FIELDS`). Those Sources receive account setup problems through `SourceContext.problem`; optional-source failures do not stop GitHub.
 
 
 ## Modules
@@ -367,6 +367,11 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/github-pull.ts` | The pull request rules: which pull requests a Ticket follows (`claimPull`, `observePull`), the closes it reports to the Engine, and `pullEndNotices`, the chat notice of a Ticket that ended merged or closed |
 | `src/sources/github-channel.ts` | The GitHub Channel: comments and review thread replies, `sent` or `gone` |
 | `src/sources/github-read.ts` | CI snapshots, repository reads, the `github/` resources, and `githubThreadContext`: an Issue's or pull request's conversation by page |
+| `src/sources/gitee.ts` | The independent Gitee repository kind and plugin entry, exported as `./gitee-watch`: updated Issues/PRs, comments, subscribed Threads, and ticket PR lifecycle polling |
+| `src/sources/gitee-trigger.ts` | Gitee's string Issue IDs, numeric PRs, comments, stable Trigger IDs, Threads, Channels, mentions, and repository URLs |
+| `src/sources/gitee-channel.ts` | Idempotent Gitee Issue and PR comments, and their links |
+| `src/sources/gitee-pull.ts` | Gitee PR reads, branch/account/repository binding, close and merge observation, and terminal chat notices |
+| `src/sources/gitee-read.ts` | Gitee repository file and directory reads, the `gitee/` resources, and Issue/PR conversation context |
 | `src/sources/feishu.ts` | The Feishu kind and plugin entry, exported as `./feishu-watch` |
 | `src/sources/feishu-trigger.ts` | Feishu messages as Triggers, by one rule for live events, history pages and topic pages |
 | `src/sources/feishu-loops.ts` | The Feishu loops: the event consumer, history recovery, chat names and polling of subscribed topics |
@@ -374,6 +379,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/sources/feishu-read.ts` | The `feishu/` reads of a Trigger's message, its root, parent and topic, and `feishuThreadContext`, which gives them to assessments with their images |
 | `src/sources/admission-context.ts` | The bounded window an assessment starts from: the first pages of a Trigger's Thread, read through its kind, and the messages around the Trigger |
 | `src/sources/feishu-image.ts` | Reads a Feishu message's image as an attachment for the assessing Session |
+| `src/sources/qoder.ts` | The Qoder kind and plugin entry, exported as `./qoder-watch`: a local file inbox of delegated tasks polled into explicit Triggers, and a Channel that writes replies to an outbox directory |
 | `src/client/index.tsx` | The client plugin entry: the sidebar entry, the main panel and the page in DeepSeek Harness's Plugin Manager |
 | `src/client/app.tsx` | The panel: header, search, glossary, tabs and the page of the current route |
 | `src/client/provider.tsx` | What every page reads from its host: copy, calls, navigation, notices, the state poll, and `restart`, which reads the state quickly while dsh-superagent restarts |
@@ -397,7 +403,7 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `src/client/locales.ts` | All copy in both languages, and the glossary of [001 Domain model](001-domain.md) |
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
 
-`src/sources/github.ts` and `src/sources/feishu.ts` are also the entries of the two Source plugins, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the three plugins, with Feishu disabled.
+`src/sources/github.ts`, `src/sources/gitee.ts` and `src/sources/feishu.ts` are also Source plugin entries, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./gitee-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the four plugins, with Feishu disabled; Gitee waits for its own optional account and repository.
 
 ## Tests
 
@@ -408,6 +414,8 @@ Some generic modules still refer directly to GitHub or Feishu:
 | `tests/policy.spec.ts` | Source scope, the gate, the admission table, Mandate revalidation, the Policy version, settings migrations and assessment outcomes |
 | `tests/registry.spec.ts` | `SourceRegistry`: instances, validation, Policy parts, Channels and Thread context |
 | `tests/sources.spec.ts` | The Feishu and GitHub Sources on a `SourceContext`: translation, polls and read positions, the pull request rules, health |
+| `tests/gitee.spec.ts` | The Gitee Source: translation, polling and cursors, repository reads, plugin health, PR binding and closure, and simultaneous GitHub/Gitee Tickets with same-numbered PRs |
+| `tests/qoder.spec.ts` | The Qoder Source on a `SourceContext`: task translation, inbox intake and deduplication, the outbox Channel, and the explicit gate |
 | `tests/commands.spec.ts` | CLI calls as the deployment's accounts, the Channels' answers, and repository-scoped GitHub calls |
 | `tests/feishu-read.spec.ts`, `tests/github-read.spec.ts` | Feishu and GitHub reads |
 | `tests/admission-context.spec.ts`, `tests/feishu-image.spec.ts` | The Thread window of assessments, and Feishu image reads |

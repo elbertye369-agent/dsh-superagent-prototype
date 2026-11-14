@@ -104,6 +104,23 @@ it('keeps the main Session\'s resources from an Executor Session, which lists on
   expect(offered).not.toMatch(/preview/i)
 })
 
+it('claims an independent Gitee PR through orchestrator_report without changing GitHub PR routing', async () => {
+  await h.stop()
+  h = await startRuntime(undefined, { gitee: true })
+  expect(h.runtime.deployment).toMatchObject({ repository: 'acme/widgets', gitee: { repository: 'acme/gadgets', login: 'gitee-bot' } })
+  const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修复 Gitee 回归'))
+  const pull = { number: 7, title: 'Fix Gitee regression', state: 'open', html_url: 'https://gitee.com/acme/gadgets/pulls/7',
+    body: '', user: { login: 'gitee-bot', type: 'User' }, created_at: '2026-11-01T00:00:00Z', updated_at: '2026-11-01T00:00:00Z',
+    head: { sha: 'gitee-head', ref: `agent/${ticket.execution!.name}`, repo: { full_name: 'acme/gadgets' } } }
+  const api = vi.spyOn(Commands.prototype, 'giteeApi').mockImplementation(async () => pull)
+  expect(await h.runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'Opened the Gitee PR', pr_number: 7, pr_source: 'gitee' }))
+    .toMatchObject({ reported: true })
+  expect(h.runtime.store.tickets.get(ticket.id)?.follows).toEqual([{ thread: 'gitee:pull:7', own: true }])
+  expect(h.runtime.store.threads.get('gitee:pull:7')?.subscriptions).toEqual([ticket.id])
+  expect(h.runtime.store.threads.get('github:7')).toBeUndefined()
+  expect(api).toHaveBeenCalled()
+})
+
 it('answers every routing tool in one shape: the decision it recorded, why, and the ticket card', async () => {
   const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot 修一下回归'))
   const card = expect.objectContaining({ ticket_id: ticket.id })

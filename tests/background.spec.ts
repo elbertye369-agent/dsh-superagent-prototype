@@ -10,11 +10,70 @@ function setup(waitForChildren: (agent: Agent) => Promise<boolean>, drainChildre
   const jobs = jobRegistry()
   const agent = { id: 'worker-t1', status: 'idle', whenIdle: async () => {}, inbox: { nextTurn: [], nextStep: [] }, cancel: vi.fn() } as unknown as
     Agent & { status: string; cancel: ReturnType<typeof vi.fn> }
-  const subagents = { waitForChildren: vi.fn(waitForChildren), listChildren: async () => [{ id: 'child-1' }], drainChildren: vi.fn(drainChildren) }
+  const children: { id: string; mode?: string }[] = [{ id: 'child-1' }]
+  const subagents = { waitForChildren: vi.fn(waitForChildren), listChildren: async () => children, drainChildren: vi.fn(drainChildren) }
   const services: Record<string, unknown> = { jobs: jobs.service, subagents }
-  const ctx = { get: (name: string) => services[name], agents: { get: () => agent } } as unknown as Context
-  return { ctx, agent, jobs, subagents }
+  const listeners = new Set<(info: { id: string }) => void>()
+  const ctx = { get: (name: string) => services[name], agents: { get: () => agent },
+    on: (_name: string, listener: (info: { id: string }) => void) => { listeners.add(listener); return () => { listeners.delete(listener) } } } as unknown as Context
+  const end = (id: string) => { for (const listener of listeners) listener({ id }) }
+  return { ctx, agent, jobs, subagents, children, end, listeners }
 }
+
+it('drains an external Codex execution without a local Agent when its assignment stops', async () => {
+  const { ctx, agent, subagents, children, end, listeners } = setup(async () => false, async () => { end('codex-run-1') })
+  children.splice(0, children.length, { id: 'codex-run-1', mode: 'external' }, { id: 'old-local-child', mode: 'continuable' })
+  ctx.agents.get = (() => undefined) as typeof ctx.agents.get
+  await stopSubagents(ctx, agent, true)
+  expect(subagents.drainChildren).toHaveBeenCalledWith(agent, ['codex-run-1'])
+  expect(agent.cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: true })
+  expect(listeners.size).toBe(0)
+})
+
+it('does not abort a worker report when its external Codex run already completed', async () => {
+  const { ctx, agent, subagents, children, end, listeners } = setup(async () => false, async () => { end('another-workers-child') })
+  children.splice(0, children.length, { id: 'completed-codex-run', mode: 'external' })
+  ctx.agents.get = (() => undefined) as typeof ctx.agents.get
+  ;(agent as { status: string }).status = 'running'
+  await stopSubagents(ctx, agent)
+  expect(subagents.drainChildren).toHaveBeenCalledWith(agent, ['completed-codex-run'])
+  expect(agent.cancel).not.toHaveBeenCalled()
+  expect(listeners.size).toBe(0)
+})
+
+it('still cancels the parent when an external child teardown does not finish within the bound', async () => {
+  const { ctx, agent, children, listeners } = setup(async () => false, () => new Promise(() => {}))
+  children.splice(0, children.length, { id: 'stuck-codex-run', mode: 'external' })
+  ctx.agents.get = (() => undefined) as typeof ctx.agents.get
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  try {
+    const stopping = stopSubagents(ctx, agent)
+    await vi.advanceTimersByTimeAsync(10_000)
+    await stopping
+  } finally { vi.useRealTimers() }
+  expect(agent.cancel).toHaveBeenCalledWith({ kind: 'user' }, { keepInbox: false })
+  expect(listeners.size).toBe(0)
+})
+
+it('keeps waiting for an external child without a local Agent until its result arrives', async () => {
+  let finish!: () => void
+  const completed = new Promise<void>(resolve => { finish = resolve })
+  let first = true
+  const { ctx, agent, subagents } = setup(async () => {
+    if (!first) return false
+    first = false
+    await completed
+    return true
+  })
+  ctx.agents.get = (() => undefined) as typeof ctx.agents.get
+  let settled = false
+  const quiet = untilQuiet(ctx, agent, new AbortController().signal).then(value => { settled = true; return value })
+  await new Promise(resolve => setTimeout(resolve, 0))
+  expect(settled).toBe(false)
+  finish()
+  expect(await quiet).toBe(true)
+  expect(subagents.waitForChildren).toHaveBeenCalledTimes(2)
+})
 
 it('is not quiet when an end during the subagent check woke the worker, whose own idle looks again', async () => {
   const { ctx, agent, jobs } = setup(async () => {

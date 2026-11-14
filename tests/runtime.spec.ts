@@ -3,7 +3,7 @@ import { bindScopeParent } from '@deepseek-ai/dsh-scope'
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { DatabaseSync } from 'node:sqlite'
-import { join } from 'node:path'
+import { delimiter, join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, expectTypeOf, it, vi } from 'vitest'
 import type { UserMessage } from '@deepseek-ai/dsh-llm'
 import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
@@ -47,6 +47,8 @@ let sections: Map<string, Section>
 type Guard = (execution?: { name: string; arguments: unknown }) => string | undefined
 let guards: Map<string, Guard>
 let restricts: Map<string, unknown[]>
+let inheritedShell: 'bash' | 'pwsh'
+let inheritedCodex: boolean
 type HttpHandler = (req: unknown, res: unknown) => Promise<void>
 let http: HttpHandler
 async function api(method: string, path: string): Promise<{ status: number; body: unknown }> {
@@ -135,6 +137,8 @@ async function acceptedTicket(trigger = feishu('1', '@bot 修一下回归')) {
   return { trigger, ticket, sessionId: `worker-${ticket.id}` }
 }
 beforeEach(async () => {
+  inheritedShell = 'bash'
+  inheritedCodex = false
   directory = mkdtempSync(join(tmpdir(), 'orchestrator-runtime-'))
   vi.spyOn(Commands.prototype, 'gh').mockImplementation(async args => args[1] === 'user' ? { login: 'agent-bot' } : args[1]?.includes('/pulls/') ? { state: 'open', user: { login: 'agent-bot' }, html_url: 'https://github.com/acme/widgets/pull/' + args[1].split('/').at(-1), head: { ref: `agent/${String(runtime.store.tickets.list()[0]?.execution?.name)}`, sha: 'head-1', repo: { full_name: 'acme/widgets' } } } : { default_branch: 'master', permissions: { push: true } })
   vi.spyOn(Commands.prototype, 'lark').mockResolvedValue({ users: [{ member_id: MEMBER, name: 'Alice' }], has_more: false })
@@ -164,7 +168,8 @@ beforeEach(async () => {
       if (agents.has(sessionId)) return
       const agentCtx = new Context()
       const preset = {}
-      const inherited = ['bash', 'read', 'read_image', 'skill', 'job_output', 'job_list', 'job_kill', 'grep', 'web_search',
+      const inherited = [inheritedShell, 'read', 'read_image', 'skill', 'job_output', 'job_list', 'job_kill', 'grep', 'web_search',
+        ...inheritedCodex ? ['subagent_codex', 'subagent_kimi', 'subagent_zcode', 'subagent_mcode'] : [],
         'ask_user_question', 'plugin_manager', 'schedule_create', 'create_goal', 'session_create', 'session_send_message', 'feishu_doc_edit']
       const sessionTools = new Map<string, RegisteredTool>()
       tools.set(sessionId, sessionTools)
@@ -967,27 +972,27 @@ it('runs setup again while the Feishu bot check failed, and restores the process
   await broken.ready
   expect(broken.setupProblem).toMatchObject({ place: 'deployment', code: 'gitTooOld' })
   expect(process.env.GIT_CONFIG_GLOBAL).toBeUndefined()
-  expect(process.env.PATH?.split(':')).not.toContain(join(directory, 'worker-bin'))
+  expect(process.env.PATH?.split(delimiter)).not.toContain(join(directory, 'worker-bin'))
 })
 
 it('writes worker shims and the agent environment from the configuration only, and restores the environment on stop', async () => {
   const bin = join(directory, 'worker-bin')
-  expect(readdirSync(bin).sort()).toEqual(['gh', 'lark-cli'])
+  expect(readdirSync(bin).sort()).toEqual(['gh', 'gitee', 'lark-cli'])
   expect(readFileSync(join(bin, 'lark-cli'), 'utf8')).toContain(`exec '${BOT()}'`)
   runtime.store.saveSettings({ ...runtime.store.settings(), executor: { ...runtime.store.settings().executor, blockedCommands: ['personal-gh'] } })
   const next = await restart({}, { feishu: null })
   await next.ready
-  expect(readdirSync(bin).sort()).toEqual(['gh', 'lark-cli', 'personal-gh'])
+  expect(readdirSync(bin).sort()).toEqual(['gh', 'gitee', 'lark-cli', 'personal-gh'])
   expect(readFileSync(join(bin, 'personal-gh'), 'utf8')).toContain('personal-gh is blocked in this installation; use gh, which acts as agent-bot.')
   expect(readFileSync(join(bin, 'lark-cli'), 'utf8')).toContain('lark-cli is unavailable: this installation has no Feishu bot.')
   expect(readFileSync(join(bin, 'gh'), 'utf8')).toContain(`exec '${AGENT()}'`)
-  expect(readFileSync(workerGitConfig(directory), 'utf8')).toContain(`[credential "https://github.com"]\n\thelper = "${credentialHelper(AGENT())}"`)
+  expect(readFileSync(workerGitConfig(directory), 'utf8')).toContain(`[credential "https://github.com"]\n\thelper = ${JSON.stringify(credentialHelper(AGENT()))}`)
   expect(process.env).toMatchObject({ GIT_CONFIG_GLOBAL: workerGitConfig(directory), GIT_CONFIG_NOSYSTEM: '1' })
   expect(process.env.GIT_AUTHOR_NAME).toBeUndefined()
-  expect(process.env.PATH?.split(':')[0]).toBe(bin)
+  expect(process.env.PATH?.split(delimiter)[0]).toBe(bin)
   await next.stop()
   expect(process.env.GIT_CONFIG_GLOBAL).toBeUndefined()
-  expect(process.env.PATH?.split(':')).not.toContain(bin)
+  expect(process.env.PATH?.split(delimiter)).not.toContain(bin)
 })
 
 it('waits for setup when the shim directory holds a file dsh-superagent did not write, and leaves the file alone', async () => {
@@ -1004,9 +1009,9 @@ it('rewrites the blocked-command shims when the Executor settings change them, w
   const bin = join(directory, 'worker-bin')
   const save = (blockedCommands: string[]) => runtime.settings.save('executor', { ...runtime.store.settings().executor, blockedCommands }, runtime.store.blockRevision('executor'), 'panel')
   expect(await save(['personal-gh'])).toMatchObject({ saved: true, restarting: false })
-  expect(readdirSync(bin).sort()).toEqual(['gh', 'lark-cli', 'personal-gh'])
+  expect(readdirSync(bin).sort()).toEqual(['gh', 'gitee', 'lark-cli', 'personal-gh'])
   await save([])
-  expect(readdirSync(bin).sort()).toEqual(['gh', 'lark-cli'])
+  expect(readdirSync(bin).sort()).toEqual(['gh', 'gitee', 'lark-cli'])
   // The commands workers need cannot be blocked.
   await expect(save(['gh'])).rejects.toThrow()
   expect(restarts).not.toHaveBeenCalled()
@@ -1491,6 +1496,22 @@ it('fails a ticket at once on a worker error that is not passing, and relays it'
   expect(relays(runtime.masterId).at(-1)).toMatchObject({ kind: 'worker_report', ticket: { ticket_id: ticket.id }, state: 'failed' })
 })
 
+it('starts the main Session with a PowerShell-only preset and preserves its wait guard', async () => {
+  await runtime.stop()
+  agents.delete(runtime.masterId)
+  inheritedShell = 'pwsh'
+  await (await restart()).ready
+  expect(runtime.health.runtime?.state).toBe('ready')
+  expect(restricts.get(runtime.masterId)?.at(-1)).toEqual({ allow: ['skill', 'pwsh', 'read', 'read_image', 'job_output', 'job_list', 'job_kill'] })
+  const main = guards.get(runtime.masterId)!
+  const command = (text: string, extra = {}) => ({ name: 'pwsh', arguments: { command: text, ...extra } })
+  expect(main(command('gh api user'))).toBeUndefined()
+  for (const text of ['Start-Sleep -Seconds 60', 'start-sleep 5', 'Write-Output ok; Start-Sleep 30', 'sleep 60'])
+    expect(main(command(text))).toMatch(/^Reports/)
+  expect(main(command('gh api user', { timeoutMs: 120_000 }))).toMatch(/^Reports/)
+  expect(main(command('gh api user', { timeoutMs: 20_000 }))).toBeUndefined()
+})
+
 it('refuses the main Session a bash command that runs sleep and a long job wait, as reports arrive by themselves, and no worker', async () => {
   const bash = (command: string) => ({ name: 'bash', arguments: { command, description: 'x' } })
   const main = guards.get(runtime.masterId)!
@@ -1708,6 +1729,30 @@ it('selects its own preset again for a main Session or worker a person switched 
   emit(runtime.masterId, 'standard')
   await vi.waitFor(() => expect(presets.select).toHaveBeenCalledTimes(1))
   await expect(presets.select.mock.results[0]!.value).rejects.toMatchObject({ code: 'agent-preset/locked' })
+})
+
+it.each(['subagent_codex', 'subagent_kimi', 'subagent_zcode', 'subagent_mcode'])('allows installed %s for workers and their children, keeps routing separate, and guards ended tickets', async toolName => {
+  inheritedCodex = true
+  await runtime.stop()
+  agents.delete(runtime.masterId)
+  await (await restart()).ready
+  // Restart rebuilds the registry; source plugins are represented by explicit registrations in this fixture.
+  runtime.sources.register(feishuKind); runtime.sources.register(githubKind)
+  const { ticket, sessionId } = await acceptedTicket()
+  const allowed = (id: string) => (restricts.get(id)!.at(-1) as { allow: string[] }).allow
+  expect(allowed(sessionId)).toContain(toolName)
+  expect(allowed(runtime.masterId)).not.toContain(toolName)
+  await (controller.create as (options: { sessionId: string }) => Promise<void>)({ sessionId: 'codex-parent-child' })
+  const child = agents.get('codex-parent-child')! as unknown as { session: { header: { parentSession?: string } } }
+  child.session.header = { parentSession: sessionId }
+  await (runtime as unknown as { ctx: Context }).ctx.parallel('agent/created', { agent: child } as never)
+  expect(allowed('codex-parent-child')).toContain(toolName)
+  const execution = { name: toolName, arguments: { prompt: 'Inspect the ticket workspace' } }
+  expect(guards.get(sessionId)!(execution)).toBeUndefined()
+  expect(guards.get('codex-parent-child')!(execution)).toBeUndefined()
+  runtime.engine.stopTicket(ticket.id)
+  expect(guards.get(sessionId)!(execution)).toBe('Ticket ended; new work needs a new authorized ticket')
+  expect(guards.get('codex-parent-child')!(execution)).toBe('Ticket ended; new work needs a new authorized ticket')
 })
 
 it('gives a subagent of a worker only the worker\'s work tools, and none once the ticket ended', async () => {

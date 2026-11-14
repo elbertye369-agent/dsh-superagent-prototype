@@ -1,5 +1,5 @@
 /**
- * In-memory DSH host fixture (as in tests/runtime.spec.ts) running a configured Runtime with GitHub and Feishu sources,
+ * In-memory DSH host fixture (as in tests/runtime.spec.ts) running a configured Runtime with GitHub and Feishu sources and optional Gitee,
  * allowed member Alice (`ou_alice`), listened chat `oc_team`, and `auto` eval mode. Stop it with `stop()`.
  */
 import { Context } from '@deepseek-ai/cordis'
@@ -13,8 +13,9 @@ import { Store } from '../../src/app/store.ts'
 import { SettingsSchema } from '../../src/policy.ts'
 import { feishuKind, feishuTrigger } from '../../src/sources/feishu.ts'
 import { githubKind } from '../../src/sources/github.ts'
+import { giteeKind } from '../../src/sources/gitee.ts'
 import { Commands } from '../../src/infra/commands.ts'
-import { credentialHelper, workerGitConfig } from '../../src/infra/environment.ts'
+import { credentialHelper, giteeCredentialHelper, workerGitConfig } from '../../src/infra/environment.ts'
 import type { Trigger } from '../../src/core/index.ts'
 import { testMachine } from './deployment.ts'
 
@@ -132,9 +133,9 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
 }
 
 /** @param seed - writes to the database before the Runtime opens it, such as records an earlier version stored. */
-export async function startRuntime(seed?: (store: Store) => void) {
+export async function startRuntime(seed?: (store: Store) => void, options: { gitee?: boolean } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'orchestrator-host-'))
-  const AGENT = join(directory, 'agent-gh'), BOT = join(directory, 'lark-bot')
+  const AGENT = join(directory, 'agent-gh'), BOT = join(directory, 'lark-bot'), GITEE = join(directory, 'agent-gitee')
   const repository = { default_branch: 'master', permissions: { push: true } }
   vi.spyOn(Commands.prototype, 'gh').mockImplementation(async args => args[1] === 'user' ? { login: 'agent-bot' } : repository)
   vi.spyOn(Commands.prototype, 'lark').mockResolvedValue({ users: [{ member_id: MEMBER, name: 'Alice' }], has_more: false })
@@ -147,6 +148,9 @@ export async function startRuntime(seed?: (store: Store) => void) {
     [`${BOT} auth status`]: JSON.stringify({ appId: 'cli_bot', brand: 'feishu', identities: { bot: { status: 'ready' } } }),
     [`${BOT} config strict-mode`]: 'strict-mode: bot (source: profile)',
     [`${BOT} api GET /open-apis/bot/v3/info --as bot --format ndjson`]: '{"bot":{"open_id":"ou_bot"},"code":0,"msg":"ok"}',
+    [`${GITEE} api /user`]: '{"login":"gitee-bot","id":8}',
+    [`${GITEE} api /repos/acme/gadgets`]: '{"full_name":"acme/gadgets","permissions":{"push":true}}',
+    ['git config -z --show-origin --get-all credential.https://gitee.com.helper']: `file:${workerGitConfig(directory)}\0${giteeCredentialHelper(GITEE)}\0`,
     ['git config -z --show-origin --get-all credential.https://github.com.helper']: `file:${workerGitConfig(directory)}\0${credentialHelper(AGENT)}\0`,
     [scoped]: `global\0credential.helper\n\0global\0credential.https://github.com.helper\n${credentialHelper(AGENT)}\0`,
   }
@@ -243,18 +247,21 @@ export async function startRuntime(seed?: (store: Store) => void) {
     jobs: jobs.service, subagents: subagents.service }
   const ctx = new Context()
   for (const [name, service] of Object.entries(services)) ctx.reflect.provide(name, service)
-  for (const cli of [AGENT, BOT]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
+  for (const cli of [AGENT, BOT, GITEE]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const seeded = new Store(join(directory, 'orchestrator.sqlite'))
-  const sources = { github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }, feishu: { enabled: true, config: { cli: BOT } } }
+  const sources = { github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }, feishu: { enabled: true, config: { cli: BOT } },
+    ...options.gitee ? { gitee: { enabled: true, config: { repository: 'acme/gadgets', cli: GITEE } } } : {} }
   seeded.saveSettings(SettingsSchema.parse({ ...seeded.settings(), sources }))
   seed?.(seeded)
   seeded.close()
   const runtime = new Runtime(ctx, testMachine({ stateDir: directory }), vi.fn())
   await runtime.ready
   runtime.sources.register(feishuKind); runtime.sources.register(githubKind)
+  if (options.gitee) runtime.sources.register(giteeKind)
   const settings = runtime.store.settings()
   runtime.store.saveSettings({ ...settings, eval: { ...settings.eval, mode: 'auto' },
-    policy: { ...settings.policy, sources: { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT }, github: { allowed: [{ id: 'alice' }] } } },
+    policy: { ...settings.policy, sources: { feishu: { allowed: [{ id: MEMBER, name: 'Alice' }], syncChat: CHAT }, github: { allowed: [{ id: 'alice' }] },
+      ...options.gitee ? { gitee: { allowed: [{ id: 'alice' }] } } : {} } },
     sources: { ...sources, feishu: { enabled: true, config: { cli: BOT, chats: [{ chatId: CHAT, listen: 'all' }], directMessages: true } } } })
   deliveries.mockClear()
 
