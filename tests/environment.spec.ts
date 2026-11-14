@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { promisify } from 'node:util'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { SENSITIVE_ENV_PATTERN, type SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
-import { GIT_LOCATION, agentVariables, credentialHelper, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
+import { GIT_LOCATION, agentVariables, credentialHelper, giteeCredentialHelper, runAsWorker, verifyDirectory, withoutDirectory, workerBin, workerGitConfig, writeEnvironment }
   from '../src/infra/environment.ts'
 import { CliError } from '../src/infra/commands.ts'
 import { testDeployment } from './fixtures/deployment.ts'
@@ -49,7 +49,7 @@ describe('worker shims', () => {
   it('replace only what dsh-superagent wrote and refuse anything else in its places', async () => {
     await writeEnvironment(testDeployment({ stateDir: dir }), ['old-cli'])
     await writeEnvironment(testDeployment({ stateDir: dir }), [])
-    expect(readdirSync(workerBin(dir)).sort()).toEqual(['gh', 'lark-cli'])
+    expect(readdirSync(workerBin(dir)).sort()).toEqual(['gh', 'gitee', 'lark-cli'])
     // A file that merely contains the marker on a later line, a symlink to a shim, and a foreign gitconfig are all rejected.
     writeFileSync(join(workerBin(dir), 'notes'), `notes\nmore\n${readFileSync(join(workerBin(dir), 'gh'), 'utf8').split('\n')[1]}\n`)
     await expect(writeEnvironment(testDeployment({ stateDir: dir }), [])).rejects.toThrow(`${join(workerBin(dir), 'notes')} was not written by dsh-superagent`)
@@ -66,7 +66,7 @@ describe('worker shims', () => {
     const legacy = (file: string, name: string) => writeFileSync(file, readFileSync(file, 'utf8').replace('Written by dsh-superagent', `Written by ${name}`))
     legacy(join(workerBin(dir), 'old-cli'), 'dsh-tag'); legacy(join(workerBin(dir), 'older-cli'), 'dsh-freelancer'); legacy(workerGitConfig(dir), 'dsh-go')
     await writeEnvironment(testDeployment({ stateDir: dir }), [])
-    expect(readdirSync(workerBin(dir)).sort()).toEqual(['gh', 'lark-cli'])
+    expect(readdirSync(workerBin(dir)).sort()).toEqual(['gh', 'gitee', 'lark-cli'])
     expect(readFileSync(workerGitConfig(dir), 'utf8')).toContain('Written by dsh-superagent')
   })
 })
@@ -94,6 +94,29 @@ describe('agent git configuration', () => {
     await git('-C', 'repo', '-c', 'user.name=Alice', '-c', 'user.email=alice@example.com', 'commit', '--allow-empty', '-q', '-m', 'with identity')
     expect(await git('-C', 'repo', 'log', '-1', '--format=%an <%ae> / %cn <%ce>')).toBe('Alice <alice@example.com> / Alice <alice@example.com>')
   })
+})
+
+it('keeps GitHub and Gitee git remotes and credentials independent', async () => {
+  const gh = program(join(dir, 'real', 'gh'), `case "$*" in\n  "auth git-credential get") printf 'username=gh-bot\\npassword=github-token\\n' ;;\nesac`)
+  const gitee = program(join(dir, 'real', 'gitee'), `case "$*" in\n  "auth token") echo gitee-token ;;\nesac`)
+  const deployment = testDeployment({ stateDir: dir, github: { ...testDeployment().github, cli: gh },
+    gitee: { cli: gitee, login: 'gitee-bot', noreply: '8+gitee-bot@user.noreply.gitee.com', repository: 'acme/gadgets', repositories: ['acme/gadgets'] } })
+  await writeEnvironment(deployment, [])
+  const config = readFileSync(workerGitConfig(dir), 'utf8')
+  expect(config).toContain(`helper = ${JSON.stringify(credentialHelper(gh))}`)
+  expect(config).toContain(`helper = ${JSON.stringify(giteeCredentialHelper(gitee))}`)
+  const env = workerEnv({ PATH: process.env.PATH, HOME: dir, ...agentVariables(dir) })
+  await exec('git', ['init', '-q', 'repo'], { cwd: dir, env })
+  await exec('git', ['-C', 'repo', 'remote', 'add', 'origin', 'git@gitee.com:acme/gadgets.git'], { cwd: dir, env })
+  expect((await exec('git', ['-C', 'repo', 'remote', 'get-url', '--push', 'origin'], { cwd: dir, env })).stdout.trim())
+    .toBe('https://gitee.com/acme/gadgets.git')
+  const fill = async (host: string) => {
+    const running = exec('git', ['-C', 'repo', 'credential', 'fill'], { cwd: dir, env, timeout: 10_000 })
+    running.child.stdin?.end(`protocol=https\nhost=${host}\n\n`)
+    return (await running).stdout
+  }
+  expect(await fill('gitee.com')).toContain('username=gitee-bot\npassword=gitee-token')
+  expect(await fill('github.com')).toContain('username=gh-bot\npassword=github-token')
 })
 
 it('fails instead of asking the operator\'s askpass helpers when the agent\'s credential helper has no answer', async () => {

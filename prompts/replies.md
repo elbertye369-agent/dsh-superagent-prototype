@@ -23,7 +23,7 @@ A pending acknowledgement is not a sent message: the host retries delivery; do n
 A dropped acknowledgement will never arrive either: do not resend it elsewhere, and if the person's missing confirmation matters, say so in your report's summary.
 Do not scan old history to backfill acknowledgements.
 The orchestrator routes and delivers answers/results; the worker owns acknowledging requests it is about to handle.
-Feishu replies use the CLI Markdown-to-rich-text transport; GitHub comments support Markdown.
+Feishu replies use the CLI Markdown-to-rich-text transport; GitHub and Gitee comments support Markdown.
 100 words is a hard ceiling, not a writing target.
 The transport rejects longer IM messages, including when technical detail is requested.
 Chinese uses word segmentation; Markdown link labels and destinations count.

@@ -5,14 +5,17 @@ import { feishuKind } from '../src/sources/feishu.ts'
 import { feishuChannel } from '../src/sources/feishu-trigger.ts'
 import { githubKind } from '../src/sources/github.ts'
 import { githubChannel } from '../src/sources/github-trigger.ts'
+import { giteeKind } from '../src/sources/gitee.ts'
+import { giteeChannel } from '../src/sources/gitee-trigger.ts'
 import { SourceRegistry } from '../src/sources/registry.ts'
 import { SettingsSchema } from '../src/policy.ts'
 import { key, type OutboundMessage } from '../src/core/index.ts'
 import { testDeployment } from './fixtures/deployment.ts'
 const sources = new SourceRegistry(() => SettingsSchema.parse({}))
-sources.register(feishuKind); sources.register(githubKind)
+sources.register(feishuKind); sources.register(githubKind); sources.register(giteeKind)
 const send = (commands: Commands, message: OutboundMessage) => sources.send(message, commands)
-const deployment = testDeployment({ github: { ...testDeployment().github, cli: '/path/agent-gh' } })
+const deployment = testDeployment({ github: { ...testDeployment().github, cli: '/path/agent-gh' },
+  gitee: { cli: '/path/agent-gitee', login: 'gitee-bot', noreply: '8+gitee-bot@user.noreply.gitee.com', repository: 'acme/gadgets', repositories: ['acme/gadgets'] } })
 const REPOSITORY = deployment.repository
 const reply = { id: 'stable-operation', channel: githubChannel(8), text: 'Done', kind: 'reply' as const }
 describe('account-isolated operations', () => {
@@ -158,6 +161,64 @@ describe('GitHub calls', () => {
     expect(tally).toEqual({ skipped: 1 })
     run.mockResolvedValue('{"message":"not a list"}')
     await expect(value.pages(z.looseObject({ id: z.number() }), 'issues/12/comments')).rejects.toThrow()
+  })
+})
+describe('Gitee calls and channel', () => {
+  const giteeReply = { ...reply, channel: giteeChannel('acme/gadgets', 'IKRYZ3', false) }
+  it('uses the independent CLI and restricts API paths to the Gitee repository', async () => {
+    const commands = new Commands(() => deployment, {}, new AbortController().signal)
+    const run = vi.spyOn(commands, 'run').mockResolvedValue('{"number":"IKRYZ3"}')
+    expect(await commands.giteeApi(z.looseObject({ number: z.string() }), 'issues/IKRYZ3')).toEqual({ number: 'IKRYZ3' })
+    expect(run).toHaveBeenCalledWith('/path/agent-gitee', ['api', '/repos/acme/gadgets/issues/IKRYZ3'])
+    for (const path of ['/repos/acme/widgets', '../widgets', 'issues/../../widgets', 'https://gitee.com/acme/widgets']) {
+      await expect(commands.giteeApi(z.unknown(), path)).rejects.toThrow('restricted to the configured repositories')
+    }
+    expect(run).toHaveBeenCalledOnce()
+    await expect(new Commands(() => testDeployment({ gitee: undefined }), {}, new AbortController().signal).giteeApi(z.unknown(), ''))
+      .rejects.toThrow('no working CLI')
+  })
+  it('reads all Gitee pages and skips malformed entries', async () => {
+    const commands = new Commands(() => deployment, {}, new AbortController().signal)
+    const run = vi.spyOn(commands, 'run').mockImplementation(async (_program, args) => {
+      const page = Number(/[?&]page=(\d+)/.exec(args[1]!)?.[1])
+      return JSON.stringify(page === 1 ? Array.from({ length: 100 }, (_, id) => ({ id })) : [{ id: 101 }, { id: 'bad' }])
+    })
+    const tally = { skipped: 0 }
+    expect(await commands.giteePages(z.looseObject({ id: z.number() }), 'issues/IKRYZ3/comments', tally)).toHaveLength(101)
+    expect(tally).toEqual({ skipped: 1 })
+    expect(run.mock.calls.map(call => call[1][1])).toEqual([
+      '/repos/acme/gadgets/issues/IKRYZ3/comments?per_page=100&page=1', '/repos/acme/gadgets/issues/IKRYZ3/comments?per_page=100&page=2',
+    ])
+  })
+  it('drops a permanently deleted Gitee conversation but retries uncertain repository access', async () => {
+    const commands = new Commands(() => deployment, {}, new AbortController().signal)
+    const scoped = commands.giteeIn('acme/gadgets')
+    vi.spyOn(commands, 'giteeIn').mockReturnValue(scoped)
+    vi.spyOn(scoped, 'pages').mockResolvedValue([])
+    const post = vi.spyOn(scoped, 'api')
+    post.mockRejectedValueOnce(new CliError('gone', 410))
+    expect(await send(commands, giteeReply)).toBe('gone')
+    post.mockRejectedValueOnce(new CliError('not found', 404))
+    await expect(send(commands, giteeReply)).rejects.toMatchObject({ code: 404 })
+    post.mockRejectedValueOnce(new CliError('rate limited', 429))
+    await expect(send(commands, giteeReply)).rejects.toMatchObject({ code: 429 })
+  })
+  it('sends Gitee comments once and links Issues and PRs to their own pages', async () => {
+    const commands = new Commands(() => deployment, {}, new AbortController().signal)
+    const scoped = commands.giteeIn('acme/gadgets')
+    vi.spyOn(commands, 'giteeIn').mockReturnValue(scoped)
+    vi.spyOn(scoped, 'pages').mockResolvedValue([])
+    const post = vi.spyOn(scoped, 'api').mockResolvedValue({})
+    expect(await send(commands, giteeReply)).toBe('sent')
+    expect(post).toHaveBeenCalledWith(expect.anything(), 'issues/IKRYZ3/comments', '--method', 'POST', '-f',
+      'body=Done\n\n<!-- dsh-superagent:stable-operation -->')
+    vi.spyOn(scoped, 'pages').mockResolvedValue([{ id: 1, body: '<!-- dsh-superagent:stable-operation -->', user: { login: 'Gitee-Bot' } }])
+    expect(await send(commands, giteeReply)).toBe('sent')
+    expect(post).toHaveBeenCalledOnce()
+    expect(giteeKind.channel!.link(giteeChannel('acme/gadgets', 'IKRYZ3', false).address, { giteeRepository: 'acme/gadgets' }).url)
+      .toBe('https://gitee.com/acme/gadgets/issues/IKRYZ3')
+    expect(giteeKind.channel!.link(giteeChannel('acme/gadgets', 7, true).address, { giteeRepository: 'acme/gadgets' }).url)
+      .toBe('https://gitee.com/acme/gadgets/pulls/7')
   })
 })
 it('says how to add the bot to a chat when Feishu answers that it is not a member, and keeps the code', async () => {

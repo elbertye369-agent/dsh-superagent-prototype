@@ -1,9 +1,10 @@
-/** Subprocess wrapper for running gh, lark-cli, and git commands under the deployment's configured accounts. */
+/** Subprocess wrapper for running gh, gitee, lark-cli, and git commands under the deployment's configured accounts. */
 import { execFile } from 'node:child_process'
 import { basename } from 'node:path'
 import { promisify } from 'node:util'
 import { z } from 'zod'
 import type { Deployment } from '../deployment.ts'
+import { sameName } from './text.ts'
 
 const exec = promisify(execFile)
 const TIMEOUT_MS = 90_000
@@ -68,7 +69,7 @@ export class Commands {
   async run(program: string, args: string[], cwd?: string): Promise<string> {
     try {
       const { stdout } = await exec(program, args, { cwd, signal: this.signal, timeout: TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024,
-        env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
+        env: { ...process.env, ...this.environment, GH_PROMPT_DISABLED: '1', GITEE_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_UPDATE_NOTIFIER: '1', LARKSUITE_CLI_NO_SKILLS_NOTIFIER: '1' } })
       return stdout
     } catch (error) { throw commandError(error, program) }
   }
@@ -95,6 +96,45 @@ export class Commands {
     const outside = /^\/|^[a-z]+:|(^|\/)\.\.?(\/|\?|$)/i.test(path)
     if (outside) throw new Error('GitHub calls are restricted to the configured repository')
     return path ? `repos/${this.repository}/${path}` : `repos/${this.repository}`
+  }
+  /** Binds Gitee reads and writes to a watched repository under the agent account. */
+  giteeIn(repository: string) {
+    const account = this.deployment.gitee
+    if (!account) throw new Error('The Gitee Source has no working CLI')
+    const canonical = account.repositories.find(name => sameName(name, repository))
+    if (!canonical) throw new Error('Gitee calls are restricted to the configured repositories')
+    return {
+      api: <T>(schema: z.ZodType<T>, path: string, ...flags: string[]): Promise<T> => this.giteeApiIn(canonical, schema, path, ...flags),
+      pages: <T>(item: z.ZodType<T>, path: string, tally?: Tally): Promise<T[]> => this.giteePagesIn(canonical, item, path, tally),
+    }
+  }
+  /** Calls the authenticated Gitee V5 API within the primary watched repository. */
+  async giteeApi<T>(schema: z.ZodType<T>, path: string, ...flags: string[]): Promise<T> {
+    return this.giteeIn(this.deployment.gitee?.repository ?? '').api(schema, path, ...flags)
+  }
+  /** Fetches all pages of a Gitee list in the primary watched repository. */
+  async giteePages<T>(item: z.ZodType<T>, path: string, tally?: Tally): Promise<T[]> {
+    return this.giteeIn(this.deployment.gitee?.repository ?? '').pages(item, path, tally)
+  }
+  private async giteeApiIn<T>(repository: string, schema: z.ZodType<T>, path: string, ...flags: string[]): Promise<T> {
+    const account = this.deployment.gitee
+    if (!account) throw new Error('The Gitee Source has no working CLI')
+    const outside = /^\/|^[a-z]+:|(^|\/)\.\.?(\/|\?|$)/i.test(path)
+    if (outside) throw new Error('Gitee calls are restricted to the configured repositories')
+    const target = `/repos/${repository}${path ? `/${path}` : ''}`
+    return schema.parse(JSON.parse(await this.run(account.cli, ['api', target, ...flags])))
+  }
+  /** Skips malformed items and stops on a short page. */
+  private async giteePagesIn<T>(repository: string, item: z.ZodType<T>, path: string, tally?: Tally): Promise<T[]> {
+    const sized = /(?:\?|&)per_page=/.test(path) ? path : `${path}${path.includes('?') ? '&' : '?'}per_page=100`
+    const result: T[] = []
+    for (let page = 1; page <= 1000; page++) {
+      const listed = await this.giteeApiIn(repository, z.array(z.unknown()), `${sized}${sized.includes('?') ? '&' : '?'}page=${page}`)
+      result.push(...validItems(item, listed, tally))
+      if (listed.length < 100) return result
+      if (page === 1000) throw new Error('Gitee list exceeds the 1000-page read limit')
+    }
+    return result
   }
   /**
    * Runs the Feishu bot's `lark-cli` and returns the JSON `data` payload.

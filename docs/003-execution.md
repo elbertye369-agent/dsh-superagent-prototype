@@ -68,14 +68,18 @@ The prepare command and Executor instructions receive the same execution variabl
 | --- | --- | --- |
 | `DSH_SUPERAGENT_DIR`, `DSH_SUPERAGENT_NAME`, `DSH_SUPERAGENT_TICKET` | Executor | The Ticket's directory, short name and id |
 | `DSH_SUPERAGENT_BLOCKED_COMMANDS` | Executor | Commands the Executor may not run |
+| `DSH_SUPERAGENT_SOURCE`, `DSH_SUPERAGENT_REPOSITORY`, `DSH_SUPERAGENT_GIT_URL`, `DSH_SUPERAGENT_PR_HEAD` | Executor | The Ticket's origin Source, selected repository, independent HTTPS Git remote and source-PR head ref; Feishu and other non-Gitee work defaults to GitHub |
 | `DSH_SUPERAGENT_GITHUB_REPOSITORY` | GitHub | The repository the Source watches, `owner/name` |
 | `DSH_SUPERAGENT_GITHUB_ACCOUNT`, `DSH_SUPERAGENT_GITHUB_COMMIT_EMAIL` | GitHub | The agent account and its commit email |
 | `DSH_SUPERAGENT_GITHUB_NUMBER`, `DSH_SUPERAGENT_GITHUB_PR_HEAD` | GitHub | The Issue or pull request that started the Ticket, and its head ref when it is a pull request |
+| `DSH_SUPERAGENT_GITEE_REPOSITORY`, `DSH_SUPERAGENT_GITEE_ACCOUNT`, `DSH_SUPERAGENT_GITEE_COMMIT_EMAIL` | Gitee | The Ticket's own Gitee repository, agent account and commit email |
+| `DSH_SUPERAGENT_GITEE_REPOSITORIES` | Gitee | All watched Gitee repositories, as owner/name separated by spaces |
+| `DSH_SUPERAGENT_GITEE_NUMBER`, `DSH_SUPERAGENT_GITEE_PR_HEAD` | Gitee | The Gitee Issue or PR that started the Ticket, and its head ref when it is a PR |
 | `DSH_SUPERAGENT_FEISHU_BOT`, `DSH_SUPERAGENT_FEISHU_CHAT` | Feishu | The bot, and the chat that started the Ticket |
 
 Ticket-specific values come from its directory and originating Trigger. Other values come from the current deployment settings. Only the panel can change execution environment settings; text sent to the main Session cannot change the configured shell command.
 
-Workers reach GitHub through the agent account's `gh` and Feishu through the bot's `lark-cli`. Blocked commands fail when invoked by name.
+Workers reach GitHub through the agent account's `gh`, Gitee through its independent account's `gitee`, and Feishu through the bot's `lark-cli`. Blocked commands fail when invoked by name.
 
 These wrappers and directories establish defaults, not a security boundary. A worker can still execute a program by absolute path.
 
@@ -95,7 +99,7 @@ Reviews without a body, such as approvals, also arrive as Triggers and can wake 
 - **Nothing to do:** an Executor that finds no work for a person to act on, such as a request that does not reproduce or is superseded, reports `dropped`. The Ticket ends without a message, unless a matched rule asks for one, and a person's later message on its Threads resumes it.
 ### Pull requests
 
-A Ticket follows the pull request it started from once its Executor reports it. It also follows each pull request opened from its branch once reported by the Executor or found by the GitHub Source. Reopened pull requests are followed again.
+A Ticket follows the pull request it started from once its Executor reports it. It also follows each pull request opened from its branch once reported by the Executor or found by the GitHub or Gitee Source. The Executor selects Gitee with `pr_source: "gitee"`; the default remains GitHub. Gitee Threads are `gitee:<owner/name>:pull:<number>`; same-numbered PRs across repositories or services have independent Ticket bindings. For a Gitee PR outside the Ticket's own repository, `orchestrator_report` accepts `pr_repository: "owner/name"` from the watched list. Reopened pull requests are followed again.
 
 The Ticket is done when none of the pull requests it opened remain open. If it opened none, all pull requests it follows must be closed. It then ends with the outcome of the last relevant close and keeps its Subscriptions, allowing a later human comment to resume it.
 

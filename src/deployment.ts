@@ -8,9 +8,10 @@ import { z } from 'zod'
 import type { SubprocessRuntime } from '@deepseek-ai/dsh-subprocess'
 import { runAsWorker, sameDirectory, withoutDirectory, workerBin } from './infra/environment.ts'
 import { SetupError } from './setup.ts'
+import { sameName } from './infra/text.ts'
 
 const reason = (error: unknown): string => error instanceof Error ? error.message : String(error)
-const absolute = (description: string) => s.string().pattern(/^\//).description(`${description} Absolute path.`)
+const absolute = (description: string) => s.string().pattern(/^([A-Za-z]:)?[\\/]/).description(`${description} Absolute path.`)
 /** Plugin configuration of the dsh-superagent entry. Volatile fields apply without a restart because dsh-superagent reads them on each use; changing `stateDir` remounts the plugin. */
 export const Config = s.object({
   stateDir: absolute('Directory for the database, locks, worker shims, the agent\'s git configuration and, by default, the ticket directories.').required(),
@@ -46,13 +47,21 @@ export const GithubAccountsSchema = z.object({
   repository: z.string().trim().regex(/^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?$/, 'owner/name').default(''),
   cli: z.string().trim().default(''),
 })
+export const GiteeAccountsSchema = z.object({
+  repository: z.string().trim().regex(/^([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+)?$/, 'owner/name').default(''),
+  repositories: z.array(z.object({ repository: z.string().trim().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/, 'owner/name') }).strict()).default([]),
+  cli: z.string().trim().default(''),
+})
 export const FeishuBotSchema = z.object({ cli: z.string().trim().default('') })
 /** Source configuration keys that affect deployment setup and trigger a restart when changed. */
-export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = { github: Object.keys(GithubAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape) }
+export const SETUP_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  github: Object.keys(GithubAccountsSchema.shape), gitee: Object.keys(GiteeAccountsSchema.shape), feishu: Object.keys(FeishuBotSchema.shape),
+}
 
 export interface Deployment extends Machine {
   repository: string
   github: { cli: string; login: string; noreply: string }
+  gitee?: { cli: string; login: string; noreply: string; repository: string; repositories: string[] }
   feishu?: FeishuBot
 }
 export interface FeishuBot { cli: string; appId: string; brand: 'feishu' | 'lark'; botId: string; name: string }
@@ -72,7 +81,13 @@ export type Probe = (argv: string[]) => Promise<string>
 /** Run startup checks through DSH's worker subprocess service with worker shims removed from PATH so a `gh` wrapper script reaches the real binary. */
 export function workerProbe(subprocess: SubprocessRuntime, stateDir: string, cwd: string, signal: AbortSignal): Probe {
   const path = withoutDirectory(process.env.PATH ?? '', workerBin(stateDir))
-  return argv => runAsWorker(subprocess, ['env', `PATH=${path}`, ...argv], cwd, AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
+  return argv => {
+    // Git for Windows env.exe cannot find a second env on a Windows-formatted PATH.
+    // Combine the bot probe's environment assignments with the outer PATH assignment.
+    const command = process.platform === 'win32' && argv[0] === 'env' ? argv.slice(1) : argv
+    const msys = process.platform === 'win32' ? ['MSYS_NO_PATHCONV=1'] : []
+    return runAsWorker(subprocess, ['env', `PATH=${path}`, ...msys, ...command], cwd, AbortSignal.any([signal, AbortSignal.timeout(60_000)]))
+  }
 }
 
 const GithubUser = z.object({ login: z.string().regex(/^[A-Za-z0-9-]+$/), id: z.number().int().positive() })
@@ -103,6 +118,35 @@ export async function resolveDeployment(machine: Machine, github: unknown, probe
   const repository = access.name
   if (access.push !== true) throw new SetupError('repositoryReadOnly', { account: agent.login, repository })
   return { ...machine, repository, github: { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@users.noreply.github.com` } }
+}
+
+const GiteeUser = z.object({ login: z.string().regex(/^[A-Za-z0-9_-]+$/), id: z.number().int().positive() })
+const GiteeRepositoryAccess = z.object({ full_name: z.string().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/),
+  owner: z.looseObject({ login: z.string() }).nullish(), permissions: z.looseObject({ push: z.boolean().nullable() }).nullish() })
+/** Verify the optional Gitee CLI identity and push access to every watched repository. */
+export async function resolveGiteeDeployment(machine: Machine, gitee: unknown, probe: Probe, path = process.env.PATH ?? ''): Promise<Deployment['gitee']> {
+  const accounts = GiteeAccountsSchema.parse(gitee ?? {})
+  const watched = [accounts.repository, ...accounts.repositories.map(row => row.repository)].filter(Boolean)
+    .filter((repository, index, all) => all.findIndex(other => sameName(repository, other)) === index)
+  if (!watched.length && !accounts.cli) return undefined
+  if (!watched.length) throw new SetupError('giteeRepositoryUnset')
+  if (!accounts.cli) throw new SetupError('giteeCliUnset')
+  let cli: string
+  try { cli = executable(accounts.cli, path, workerBin(machine.stateDir)) } catch (error) { throw new SetupError('giteeCliMissing', { output: reason(error) }) }
+  const text = await probe([cli, 'api', '/user']).catch((error: unknown) => { throw new SetupError('giteeCliSignedOut', { output: reason(error) }) })
+  const agent = parsed(GiteeUser, text)
+  if (!agent) throw new SetupError('giteeNoAccount')
+  const repositories: string[] = []
+  for (const remote of watched) {
+    const access = parsed(GiteeRepositoryAccess, await probe([cli, 'api', `/repos/${remote}`]).catch((error: unknown) => {
+      throw new SetupError('giteeRepositoryUnreadable', { account: agent.login, repository: remote, output: reason(error) })
+    }))
+    if (!access) throw new SetupError('giteeRepositoryUnreported', { repository: remote })
+    const owner = access.owner?.login && sameName(access.owner.login, agent.login)
+    if (access.permissions?.push !== true && !owner) throw new SetupError('giteeRepositoryReadOnly', { account: agent.login, repository: access.full_name })
+    if (!repositories.some(repository => sameName(repository, access.full_name))) repositories.push(access.full_name)
+  }
+  return { cli, login: agent.login, noreply: `${agent.id}+${agent.login}@user.noreply.gitee.com`, repository: repositories[0]!, repositories }
 }
 
 const AuthStatus = z.object({ appId: z.string().regex(/^cli_[A-Za-z0-9]+$/), brand: z.enum(['feishu', 'lark']).default('feishu'), identities: z.object({ bot: z.object({ status: z.string() }) }) })

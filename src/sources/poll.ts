@@ -1,4 +1,4 @@
-/** Shared polling helpers for subscribed threads, overlap-safe cursors, and timer-friendly delays. */
+/** Source-neutral polling helpers for subscribed threads, overlap-safe cursors, and timer-friendly delays. */
 import { liveTicket, type Thread } from '../core/index.ts'
 import type { SourceContext } from './host.ts'
 

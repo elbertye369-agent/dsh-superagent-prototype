@@ -21,7 +21,7 @@ Ordinary progress remains internal.
 Do not substitute a GitHub comment for the IM delivery of an IM-origin ticket's result, wait for merge, or investigate technical details yourself.
 Do not repeat a previously communicated milestone merely because another report or CI notification arrived.
 
-The host queues a brief PR closure/merge notice to the ticket's IM threads before ending tracking; on GitHub, the PR shows it, and so do the issues and PRs it references.
+The host queues a brief PR closure/merge notice to the ticket's IM threads before ending tracking; on GitHub or Gitee, the PR shows it, and so do the issues and PRs it references.
 Do not send a second terminal notification.
 Do not dispatch a worker for the merge notice.
 A prior PR-submission notice is not a merge announcement.
