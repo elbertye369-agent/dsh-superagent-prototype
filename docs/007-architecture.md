@@ -367,11 +367,11 @@ Some generic modules still refer directly to GitHub, Gitee or Feishu:
 | `src/sources/github-pull.ts` | The pull request rules: which pull requests a Ticket follows (`claimPull`, `observePull`), the closes it reports to the Engine, and `pullEndNotices`, the chat notice of a Ticket that ended merged or closed |
 | `src/sources/github-channel.ts` | The GitHub Channel: comments and review thread replies, `sent` or `gone` |
 | `src/sources/github-read.ts` | CI snapshots, repository reads, the `github/` resources, and `githubThreadContext`: an Issue's or pull request's conversation by page |
-| `src/sources/gitee.ts` | The independent Gitee repository kind and plugin entry, exported as `./gitee-watch`: updated Issues/PRs, comments, subscribed Threads, and ticket PR lifecycle polling |
-| `src/sources/gitee-trigger.ts` | Gitee's string Issue IDs, numeric PRs, comments, stable Trigger IDs, Threads, Channels, mentions, and repository URLs |
-| `src/sources/gitee-channel.ts` | Idempotent Gitee Issue and PR comments, and their links |
-| `src/sources/gitee-pull.ts` | Gitee PR reads, branch/account/repository binding, close and merge observation, and terminal chat notices |
-| `src/sources/gitee-read.ts` | Gitee repository file and directory reads, the `gitee/` resources, and Issue/PR conversation context |
+| `src/sources/gitee.ts` | The independent Gitee multi-repository kind and plugin entry, exported as `./gitee-watch`: updated Issues/PRs, comments, subscribed Threads, and ticket PR lifecycle polling |
+| `src/sources/gitee-trigger.ts` | Gitee's string Issue IDs, numeric PRs, comments, repository-scoped Trigger IDs, Threads, Channels, mentions, and URLs across watched repositories |
+| `src/sources/gitee-channel.ts` | Idempotent Gitee Issue and PR comments and links in each watched repository |
+| `src/sources/gitee-pull.ts` | Gitee PR reads across watched repositories, branch/account/repository binding, close and merge observation, and terminal chat notices |
+| `src/sources/gitee-read.ts` | Watched Gitee repositories' file and directory reads, repo-qualified `gitee/` resources, and Issue/PR conversation context |
 | `src/sources/feishu.ts` | The Feishu kind and plugin entry, exported as `./feishu-watch` |
 | `src/sources/feishu-trigger.ts` | Feishu messages as Triggers, by one rule for live events, history pages and topic pages |
 | `src/sources/feishu-loops.ts` | The Feishu loops: the event consumer, history recovery, chat names and polling of subscribed topics |
@@ -403,7 +403,7 @@ Some generic modules still refer directly to GitHub, Gitee or Feishu:
 | `src/client/locales.ts` | All copy in both languages, and the glossary of [001 Domain model](001-domain.md) |
 | `src/client/client.css`, `css.d.ts` | The panel's stylesheet, loaded as text |
 
-`src/sources/github.ts`, `src/sources/gitee.ts` and `src/sources/feishu.ts` are also Source plugin entries, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./gitee-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the four plugins, with Feishu disabled; Gitee waits for its own optional account and repository.
+`src/sources/github.ts`, `src/sources/gitee.ts` and `src/sources/feishu.ts` are also Source plugin entries, built by `tsdown.config.ts` and exported in `package.json` as `./github-watch`, `./gitee-watch` and `./feishu-watch`. The bundle's `cordis.patch.yml` inserts the four plugins, with Feishu disabled; Gitee waits for its own optional account and repositories.
 
 ## Tests
 

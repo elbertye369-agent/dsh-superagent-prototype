@@ -152,7 +152,7 @@ export class Runtime extends Service implements SourceHost {
             const request = store.triggers.get(ended.origin.triggerId)?.text ?? ''
             const deployment = setup.deployment
             const messages = [...pullEndNotices(ended, request, deployment.repository),
-              ...deployment.gitee ? giteePullEndNotices(ended, request, deployment.gitee.repository) : []]
+              ...deployment.gitee ? giteePullEndNotices(ended, request) : []]
             for (const message of messages) outbox.send(message)
           }
         } })

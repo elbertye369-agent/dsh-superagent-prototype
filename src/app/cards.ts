@@ -29,7 +29,7 @@ export function ticketCard(ticket: Ticket) {
   const { attention } = ticket
   const githubPull = pullOf(ticket), giteePull = giteePullOf(ticket)
   return { ticket_id: ticket.id, title: ticket.title, state: cardState(ticket), strength: ticket.mandate.strength,
-    ...(githubPull || giteePull ? { pr_number: githubPull ?? giteePull, ...!githubPull && giteePull ? { pr_source: 'gitee' } : {} } : {}),
+    ...(githubPull || giteePull ? { pr_number: githubPull ?? giteePull?.number, ...!githubPull && giteePull ? { pr_source: 'gitee' } : {} } : {}),
     ...(ended ? { ended } : {}),
     ...(attention ? { attention: { question: attention.question, ...attention.triggerId ? { trigger_id: attention.triggerId } : {} } } : {}),
     preview: preview(latestReport(ticket)?.summary ?? ''), read: `ticket/${ticket.id}` }

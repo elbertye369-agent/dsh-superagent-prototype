@@ -14,6 +14,7 @@ export async function sendGitee(host: Pick<SourceContext, 'commands'>, message: 
   const { commands } = host
   const account = commands.deployment.gitee
   if (!account) throw new Error('The Gitee Source has no working CLI')
+  const scoped = commands.giteeIn(message.channel.address.repository ?? account.repository)
   const number = message.channel.address.number ?? ''
   const pull = message.channel.address.kind === 'pull'
   if (!number) throw new Error('Missing Gitee reply target')
@@ -21,8 +22,8 @@ export async function sendGitee(host: Pick<SourceContext, 'commands'>, message: 
   const marker = `<!-- dsh-superagent:${message.id} -->`
   try {
     const mine = (comment: z.infer<typeof CommentSchema>) => sameName(comment.user.login, account.login) && (comment.body ?? '').includes(marker)
-    if ((await commands.giteePages(CommentSchema, path)).some(mine)) return 'sent'
-    await commands.giteeApi(z.unknown(), path, '--method', 'POST', '-f', `body=${message.text}\n\n${marker}`)
+    if ((await scoped.pages(CommentSchema, path)).some(mine)) return 'sent'
+    await scoped.api(z.unknown(), path, '--method', 'POST', '-f', `body=${message.text}\n\n${marker}`)
     return 'sent'
   } catch (error) {
     if (gone(error)) return 'gone'
@@ -31,6 +32,7 @@ export async function sendGitee(host: Pick<SourceContext, 'commands'>, message: 
 }
 export function giteeLink(address: Record<string, string>, links: ChannelLinks): ChannelLink {
   const number = address.number ?? '', pull = address.kind === 'pull'
-  return { url: address.url ?? (links.giteeRepository ? giteePage(links.giteeRepository, number, pull) : ''),
-    label: { zh: `Gitee ${pull ? '!' : '#'}${number}`, en: `Gitee ${pull ? '!' : '#'}${number}` } }
+  const repository = address.repository ?? links.giteeRepository
+  const label = `Gitee ${address.repository ? `${address.repository} ` : ''}${pull ? '!' : '#'}${number}`
+  return { url: address.url ?? (repository ? giteePage(repository, number, pull) : ''), label: { zh: label, en: label } }
 }

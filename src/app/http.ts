@@ -101,7 +101,7 @@ function setupView(runtime: HttpHost) {
     machine: machineView(runtime.machine), problem: runtime.setupProblem ?? null, ...runtime.giteeProblem ? { giteeProblem: runtime.giteeProblem } : {},
     feishuProblem: runtime.feishuProblem ?? null,
     accounts: resolved ? { repository: resolved.repository, agent: resolved.github.login,
-      ...resolved.gitee ? { gitee: { repository: resolved.gitee.repository, agent: resolved.gitee.login } } : {},
+      ...resolved.gitee ? { gitee: { repository: resolved.gitee.repository, repositories: resolved.gitee.repositories, agent: resolved.gitee.login } } : {},
       feishu: resolved.feishu ? { appId: resolved.feishu.appId, brand: resolved.feishu.brand, botId: resolved.feishu.botId, name: resolved.feishu.name } : null } : null,
   }
 }

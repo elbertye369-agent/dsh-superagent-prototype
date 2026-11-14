@@ -100,7 +100,7 @@ it('keeps GitHub and Gitee git remotes and credentials independent', async () =>
   const gh = program(join(dir, 'real', 'gh'), `case "$*" in\n  "auth git-credential get") printf 'username=gh-bot\\npassword=github-token\\n' ;;\nesac`)
   const gitee = program(join(dir, 'real', 'gitee'), `case "$*" in\n  "auth token") echo gitee-token ;;\nesac`)
   const deployment = testDeployment({ stateDir: dir, github: { ...testDeployment().github, cli: gh },
-    gitee: { cli: gitee, login: 'gitee-bot', noreply: '8+gitee-bot@user.noreply.gitee.com', repository: 'acme/gadgets' } })
+    gitee: { cli: gitee, login: 'gitee-bot', noreply: '8+gitee-bot@user.noreply.gitee.com', repository: 'acme/gadgets', repositories: ['acme/gadgets'] } })
   await writeEnvironment(deployment, [])
   const config = readFileSync(workerGitConfig(dir), 'utf8')
   expect(config).toContain(`helper = ${JSON.stringify(credentialHelper(gh))}`)

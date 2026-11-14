@@ -5,6 +5,7 @@ import { builtInBase, builtInParts, defaultPrompts } from '../src/app/prompts.ts
 import { UserError } from '../src/core/index.ts'
 import { KV } from '../src/kv.ts'
 import { RESOURCES } from '../src/app/resources.ts'
+import { giteeIssueTrigger } from '../src/sources/gitee-trigger.ts'
 import { CliError, Commands } from '../src/infra/commands.ts'
 import { IM_WORDS, NOTE_WORDS } from '../src/infra/text.ts'
 import { CHAT, feishu, startRuntime, type Host } from './fixtures/host.ts'
@@ -112,11 +113,13 @@ it('claims an independent Gitee PR through orchestrator_report without changing 
   const pull = { number: 7, title: 'Fix Gitee regression', state: 'open', html_url: 'https://gitee.com/acme/gadgets/pulls/7',
     body: '', user: { login: 'gitee-bot', type: 'User' }, created_at: '2026-11-01T00:00:00Z', updated_at: '2026-11-01T00:00:00Z',
     head: { sha: 'gitee-head', ref: `agent/${ticket.execution!.name}`, repo: { full_name: 'acme/gadgets' } } }
-  const api = vi.spyOn(Commands.prototype, 'giteeApi').mockImplementation(async () => pull)
+  const scoped = h.runtime.commands.giteeIn('acme/gadgets')
+  const api = vi.spyOn(scoped, 'api').mockImplementation(async () => pull)
+  vi.spyOn(Commands.prototype, 'giteeIn').mockReturnValue(scoped)
   expect(await h.runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'Opened the Gitee PR', pr_number: 7, pr_source: 'gitee' }))
     .toMatchObject({ reported: true })
-  expect(h.runtime.store.tickets.get(ticket.id)?.follows).toEqual([{ thread: 'gitee:pull:7', own: true }])
-  expect(h.runtime.store.threads.get('gitee:pull:7')?.subscriptions).toEqual([ticket.id])
+  expect(h.runtime.store.tickets.get(ticket.id)?.follows).toEqual([{ thread: 'gitee:acme/gadgets:pull:7', own: true }])
+  expect(h.runtime.store.threads.get('gitee:acme/gadgets:pull:7')?.subscriptions).toEqual([ticket.id])
   expect(h.runtime.store.threads.get('github:7')).toBeUndefined()
   expect(api).toHaveBeenCalled()
 })
@@ -505,4 +508,43 @@ it('gives a worker the other messages of the request its ticket was accepted fro
   const page = await h.runTool(`worker-${ticket.id}`, 'orchestrator_read', { resource: `ticket/${ticket.id}` })
   expect(page).toMatchObject({ batch: [{ trigger_id: other, read: `trigger/${other}` }] })
   expect(await h.runTool(`worker-${ticket.id}`, 'orchestrator_read', { resource: `trigger/${other}` })).toMatchObject({ trigger_id: other })
+})
+
+it('reports a PR in another watched Gitee repository and rejects unwatched repositories', async () => {
+  await h.stop()
+  h = await startRuntime(undefined, { gitee: true, giteeRepositories: ['acme/tools'] })
+  const { ticket, sessionId } = await h.acceptedTicket(feishu('1', '@bot Fix the Gitee tools'))
+  const run = vi.spyOn(Commands.prototype, 'run').mockResolvedValue(JSON.stringify({ number: 7, title: 'Fix tools', state: 'open',
+    html_url: 'https://gitee.com/acme/tools/pulls/7', user: { login: 'gitee-bot' }, created_at: '2026-11-01T00:00:00Z', updated_at: '2026-11-01T00:00:00Z',
+    head: { sha: 'tools', ref: `agent/${ticket.execution!.name}`, repo: { full_name: 'acme/tools' } } }))
+  const report = { state: 'progress', summary: 'Opened tools PR', pr_number: 7, pr_source: 'gitee', pr_repository: 'acme/tools' }
+  expect(await h.runTool(sessionId, 'orchestrator_report', report)).toMatchObject({ reported: true })
+  expect(run).toHaveBeenCalledWith(h.runtime.deployment.gitee!.cli, ['api', '/repos/acme/tools/pulls/7'])
+  expect(h.runtime.store.tickets.get(ticket.id)?.follows).toEqual([{ thread: 'gitee:acme/tools:pull:7', own: true }])
+  expect(h.runtime.store.threads.get('gitee:acme/gadgets:pull:7')).toBeUndefined()
+  expect(await read(`ticket/${ticket.id}`)).toMatchObject({ pr_number: 7, pr_source: 'gitee' })
+  await expect(h.runTool(sessionId, 'orchestrator_report', { ...report, pr_repository: 'outsider/tools' })).rejects.toThrow('restricted')
+})
+
+it('defaults Gitee reports and unqualified resource reads to the reading ticket repository', async () => {
+  await h.stop()
+  h = await startRuntime(undefined, { gitee: true, giteeRepositories: ['acme/tools'] })
+  const created_at = '2026-11-01T00:00:00Z'
+  const request = giteeIssueTrigger({ number: 'I7', title: 'Tools', body: '@gitee-bot fix tools', user: { login: 'alice' },
+    html_url: 'https://gitee.com/acme/tools/issues/I7', created_at }, 'gitee-bot', 'acme/tools')
+  const run = vi.spyOn(Commands.prototype, 'run').mockImplementation(async (_program, args) => args[1]!.includes('/comments') ? '[]'
+    : JSON.stringify({ number: 'I7', id: 1, title: args[1], body: 'Tools request', state: 'open', user: { login: 'alice' },
+      html_url: request.url, created_at, updated_at: created_at }))
+  const { ticket, sessionId } = await h.acceptedTicket(request)
+  const page = await h.runTool(sessionId, 'orchestrator_read', { resource: 'gitee/issues/I7' })
+  expect(JSON.parse(page.text as string).title).toBe('/repos/acme/tools/issues/I7')
+  const primary = await read('gitee/issues/I7')
+  expect(JSON.parse(primary.text as string).title).toBe('/repos/acme/gadgets/issues/I7')
+  run.mockResolvedValue(JSON.stringify({ number: 7, title: 'Tools PR', state: 'open', html_url: 'https://gitee.com/acme/tools/pulls/7',
+    user: { login: 'gitee-bot' }, created_at, updated_at: created_at,
+    head: { sha: 'tools', ref: `agent/${ticket.execution!.name}`, repo: { full_name: 'acme/tools' } } }))
+  expect(await h.runTool(sessionId, 'orchestrator_report', { state: 'progress', summary: 'Opened PR', pr_number: 7, pr_source: 'gitee' }))
+    .toMatchObject({ reported: true })
+  expect(run.mock.calls.at(-1)![1]).toEqual(['api', '/repos/acme/tools/pulls/7'])
+  expect(h.runtime.store.tickets.get(ticket.id)?.follows).toEqual([{ thread: 'gitee:acme/tools:pull:7', own: true }])
 })

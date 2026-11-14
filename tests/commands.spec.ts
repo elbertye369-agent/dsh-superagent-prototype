@@ -15,7 +15,7 @@ const sources = new SourceRegistry(() => SettingsSchema.parse({}))
 sources.register(feishuKind); sources.register(githubKind); sources.register(giteeKind)
 const send = (commands: Commands, message: OutboundMessage) => sources.send(message, commands)
 const deployment = testDeployment({ github: { ...testDeployment().github, cli: '/path/agent-gh' },
-  gitee: { cli: '/path/agent-gitee', login: 'gitee-bot', noreply: '8+gitee-bot@user.noreply.gitee.com', repository: 'acme/gadgets' } })
+  gitee: { cli: '/path/agent-gitee', login: 'gitee-bot', noreply: '8+gitee-bot@user.noreply.gitee.com', repository: 'acme/gadgets', repositories: ['acme/gadgets'] } })
 const REPOSITORY = deployment.repository
 const reply = { id: 'stable-operation', channel: githubChannel(8), text: 'Done', kind: 'reply' as const }
 describe('account-isolated operations', () => {
@@ -164,14 +164,14 @@ describe('GitHub calls', () => {
   })
 })
 describe('Gitee calls and channel', () => {
-  const giteeReply = { ...reply, channel: giteeChannel('IKRYZ3', false) }
+  const giteeReply = { ...reply, channel: giteeChannel('acme/gadgets', 'IKRYZ3', false) }
   it('uses the independent CLI and restricts API paths to the Gitee repository', async () => {
     const commands = new Commands(() => deployment, {}, new AbortController().signal)
     const run = vi.spyOn(commands, 'run').mockResolvedValue('{"number":"IKRYZ3"}')
     expect(await commands.giteeApi(z.looseObject({ number: z.string() }), 'issues/IKRYZ3')).toEqual({ number: 'IKRYZ3' })
     expect(run).toHaveBeenCalledWith('/path/agent-gitee', ['api', '/repos/acme/gadgets/issues/IKRYZ3'])
     for (const path of ['/repos/acme/widgets', '../widgets', 'issues/../../widgets', 'https://gitee.com/acme/widgets']) {
-      await expect(commands.giteeApi(z.unknown(), path)).rejects.toThrow('restricted to the configured repository')
+      await expect(commands.giteeApi(z.unknown(), path)).rejects.toThrow('restricted to the configured repositories')
     }
     expect(run).toHaveBeenCalledOnce()
     await expect(new Commands(() => testDeployment({ gitee: undefined }), {}, new AbortController().signal).giteeApi(z.unknown(), ''))
@@ -192,8 +192,10 @@ describe('Gitee calls and channel', () => {
   })
   it('drops a permanently deleted Gitee conversation but retries uncertain repository access', async () => {
     const commands = new Commands(() => deployment, {}, new AbortController().signal)
-    vi.spyOn(commands, 'giteePages').mockResolvedValue([])
-    const post = vi.spyOn(commands, 'giteeApi')
+    const scoped = commands.giteeIn('acme/gadgets')
+    vi.spyOn(commands, 'giteeIn').mockReturnValue(scoped)
+    vi.spyOn(scoped, 'pages').mockResolvedValue([])
+    const post = vi.spyOn(scoped, 'api')
     post.mockRejectedValueOnce(new CliError('gone', 410))
     expect(await send(commands, giteeReply)).toBe('gone')
     post.mockRejectedValueOnce(new CliError('not found', 404))
@@ -203,17 +205,19 @@ describe('Gitee calls and channel', () => {
   })
   it('sends Gitee comments once and links Issues and PRs to their own pages', async () => {
     const commands = new Commands(() => deployment, {}, new AbortController().signal)
-    vi.spyOn(commands, 'giteePages').mockResolvedValue([])
-    const post = vi.spyOn(commands, 'giteeApi').mockResolvedValue({})
+    const scoped = commands.giteeIn('acme/gadgets')
+    vi.spyOn(commands, 'giteeIn').mockReturnValue(scoped)
+    vi.spyOn(scoped, 'pages').mockResolvedValue([])
+    const post = vi.spyOn(scoped, 'api').mockResolvedValue({})
     expect(await send(commands, giteeReply)).toBe('sent')
     expect(post).toHaveBeenCalledWith(expect.anything(), 'issues/IKRYZ3/comments', '--method', 'POST', '-f',
       'body=Done\n\n<!-- dsh-superagent:stable-operation -->')
-    vi.spyOn(commands, 'giteePages').mockResolvedValue([{ id: 1, body: '<!-- dsh-superagent:stable-operation -->', user: { login: 'Gitee-Bot' } }])
+    vi.spyOn(scoped, 'pages').mockResolvedValue([{ id: 1, body: '<!-- dsh-superagent:stable-operation -->', user: { login: 'Gitee-Bot' } }])
     expect(await send(commands, giteeReply)).toBe('sent')
     expect(post).toHaveBeenCalledOnce()
-    expect(giteeKind.channel!.link(giteeChannel('IKRYZ3', false).address, { giteeRepository: 'acme/gadgets' }).url)
+    expect(giteeKind.channel!.link(giteeChannel('acme/gadgets', 'IKRYZ3', false).address, { giteeRepository: 'acme/gadgets' }).url)
       .toBe('https://gitee.com/acme/gadgets/issues/IKRYZ3')
-    expect(giteeKind.channel!.link(giteeChannel(7, true).address, { giteeRepository: 'acme/gadgets' }).url)
+    expect(giteeKind.channel!.link(giteeChannel('acme/gadgets', 7, true).address, { giteeRepository: 'acme/gadgets' }).url)
       .toBe('https://gitee.com/acme/gadgets/pulls/7')
   })
 })

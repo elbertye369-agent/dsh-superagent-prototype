@@ -17,18 +17,23 @@ export const IssueSchema = CommentSchema.extend({
   created_at: z.string(), updated_at: z.string(), html_url: z.string(),
 })
 export type GiteeIssue = z.infer<typeof IssueSchema>
-export interface GiteeRef { number: string | number; isPr: boolean; url?: string }
+export interface GiteeRef { repository: string; number: string | number; isPr: boolean; url?: string }
 
-export const giteeThread = (number: string | number, isPr: boolean): string => `gitee:${isPr ? 'pull' : 'issue'}:${number}`
-export const giteeChannel = (number: string | number, isPr: boolean, url?: string): ChannelRef =>
-  ({ source: SOURCE, thread: giteeThread(number, isPr), address: { number: String(number), kind: isPr ? 'pull' : 'issue', ...(url ? { url } : {}) } })
+export const giteeThread = (repository: string, number: string | number, isPr: boolean): string => `gitee:${repository}:${isPr ? 'pull' : 'issue'}:${number}`
+export const giteeChannel = (repository: string, number: string | number, isPr: boolean, url?: string): ChannelRef =>
+  ({ source: SOURCE, thread: giteeThread(repository, number, isPr), address: { repository, number: String(number), kind: isPr ? 'pull' : 'issue', ...(url ? { url } : {}) } })
 export const giteePage = (repository: string, number: string | number, isPr = false): string =>
   `https://gitee.com/${repository}/${isPr ? 'pulls' : 'issues'}/${number}`
 /** Parses a Gitee Issue or PR URL in `repository`, rejecting other repositories and hosts. */
 export function giteeAddress(url: string, repository: string): { number: string; pr: boolean } | undefined {
+  const ref = giteeUrlRef(url)
+  return ref && sameName(ref.repository, repository) ? { number: ref.number, pr: ref.pr } : undefined
+}
+/** Parses a Gitee Issue or PR URL with its repository. */
+export function giteeUrlRef(url: string): { repository: string; number: string; pr: boolean } | undefined {
   const match = /^https:\/\/gitee\.com\/([^/]+\/[^/]+)\/(issues|pulls)\/([A-Za-z0-9]+)\/?(?:#[\w-]*)?$/i.exec(url)
-  if (!match || !sameName(match[1]!, repository)) return undefined
-  return { number: match[3]!, pr: match[2]!.toLowerCase() === 'pulls' }
+  if (!match) return undefined
+  return { repository: match[1]!, number: match[3]!, pr: match[2]!.toLowerCase() === 'pulls' }
 }
 export const giteeMentions = (text: string, login: string): boolean =>
   new RegExp(`(?:^|[^a-zA-Z0-9_@])@${escapeRegExp(login)}(?![a-zA-Z0-9_-])`, 'i').test(text)
@@ -41,34 +46,34 @@ export function giteeCommentTrigger(comment: GiteeComment, ref: GiteeRef, agent:
   const place = comment.path ? `${comment.path}${line != null ? `:${line}` : ''}` : ''
   return {
     id: key('gitee-comment', String(comment.id), comment.updated_at ?? ''), source: SOURCE,
-    threads: [{ source: SOURCE, id: `${ref.isPr ? 'pull' : 'issue'}:${ref.number}` }], ...author(comment.user, agent), at,
+    threads: [{ source: SOURCE, id: `${ref.repository}:${ref.isPr ? 'pull' : 'issue'}:${ref.number}` }], ...author(comment.user, agent), at,
     text: [place, comment.body ?? ''].filter(Boolean).join('\n\n'),
     ...(giteeMentions(comment.body ?? '', agent) ? { addressed: 'mention' as const } : {}),
-    channel: giteeChannel(ref.number, ref.isPr, comment.html_url ?? undefined),
+    channel: giteeChannel(ref.repository, ref.number, ref.isPr, comment.html_url ?? undefined),
     ...(comment.html_url ?? ref.url ? { url: comment.html_url ?? ref.url } : {}),
-    meta: { number: ref.number, isPr: ref.isPr, commentId: comment.id, kind: 'comment',
+    meta: { repository: ref.repository, number: ref.number, isPr: ref.isPr, commentId: comment.id, kind: 'comment',
       ...comment.path ? { path: comment.path, line: line ?? null } : {} },
   }
 }
 /** Builds a Trigger for a newly opened Gitee Issue. */
-export function giteeIssueTrigger(issue: Pick<GiteeIssue, 'number' | 'title' | 'body' | 'user' | 'created_at' | 'html_url'>, agent: string): Trigger {
+export function giteeIssueTrigger(issue: Pick<GiteeIssue, 'number' | 'title' | 'body' | 'user' | 'created_at' | 'html_url'>, agent: string, repository: string): Trigger {
   const body = issue.body ?? ''
   return {
-    id: key('gitee-issue', issue.number), source: SOURCE,
-    threads: [{ source: SOURCE, id: `issue:${issue.number}` }], ...author(issue.user, agent), at: issue.created_at,
+    id: key('gitee-issue', repository, issue.number), source: SOURCE,
+    threads: [{ source: SOURCE, id: `${repository}:issue:${issue.number}` }], ...author(issue.user, agent), at: issue.created_at,
     text: `${issue.title}\n\n${body}`, ...(giteeMentions(body, agent) ? { addressed: 'mention' as const } : {}),
-    channel: giteeChannel(issue.number, false, issue.html_url), url: issue.html_url,
-    meta: { number: issue.number, isPr: false, kind: 'issue' },
+    channel: giteeChannel(repository, issue.number, false, issue.html_url), url: issue.html_url,
+    meta: { repository, number: issue.number, isPr: false, kind: 'issue' },
   }
 }
 /** Builds a Trigger for a newly opened Gitee pull request. */
-export function giteePullTrigger(pull: { number: number; title: string; body?: string | null; user: { login: string; type?: string }; created_at: string; html_url: string }, agent: string): Trigger {
+export function giteePullTrigger(pull: { number: number; title: string; body?: string | null; user: { login: string; type?: string }; created_at: string; html_url: string }, agent: string, repository: string): Trigger {
   const body = pull.body ?? ''
   return {
-    id: key('gitee-pull', String(pull.number)), source: SOURCE,
-    threads: [{ source: SOURCE, id: `pull:${pull.number}` }], ...author(pull.user, agent), at: pull.created_at,
+    id: key('gitee-pull', repository, String(pull.number)), source: SOURCE,
+    threads: [{ source: SOURCE, id: `${repository}:pull:${pull.number}` }], ...author(pull.user, agent), at: pull.created_at,
     text: `${pull.title}\n\n${body}`, ...(giteeMentions(body, agent) ? { addressed: 'mention' as const } : {}),
-    channel: giteeChannel(pull.number, true, pull.html_url), url: pull.html_url,
-    meta: { number: pull.number, isPr: true, prAuthor: pull.user.login, kind: 'pull' },
+    channel: giteeChannel(repository, pull.number, true, pull.html_url), url: pull.html_url,
+    meta: { repository, number: pull.number, isPr: true, prAuthor: pull.user.login, kind: 'pull' },
   }
 }

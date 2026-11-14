@@ -133,7 +133,7 @@ export function subagentRuntime(agents: Map<string, FakeAgent>) {
 }
 
 /** @param seed - writes to the database before the Runtime opens it, such as records an earlier version stored. */
-export async function startRuntime(seed?: (store: Store) => void, options: { gitee?: boolean } = {}) {
+export async function startRuntime(seed?: (store: Store) => void, options: { gitee?: boolean; giteeRepositories?: string[] } = {}) {
   const directory = mkdtempSync(join(tmpdir(), 'orchestrator-host-'))
   const AGENT = join(directory, 'agent-gh'), BOT = join(directory, 'lark-bot'), GITEE = join(directory, 'agent-gitee')
   const repository = { default_branch: 'master', permissions: { push: true } }
@@ -154,6 +154,7 @@ export async function startRuntime(seed?: (store: Store) => void, options: { git
     ['git config -z --show-origin --get-all credential.https://github.com.helper']: `file:${workerGitConfig(directory)}\0${credentialHelper(AGENT)}\0`,
     [scoped]: `global\0credential.helper\n\0global\0credential.https://github.com.helper\n${credentialHelper(AGENT)}\0`,
   }
+  for (const repository of options.giteeRepositories ?? []) answers[`${GITEE} api /repos/${repository}`] = JSON.stringify({ full_name: repository, permissions: { push: true } })
   /** A prepare command (`sh -c`) waits for this while it is set. */
   const hooks: { prepare?: Promise<void> } = {}
   const subprocess = { spawn: vi.fn((spec: { argv: readonly string[] }) => {
@@ -250,7 +251,7 @@ export async function startRuntime(seed?: (store: Store) => void, options: { git
   for (const cli of [AGENT, BOT, GITEE]) writeFileSync(cli, '#!/bin/sh\n', { mode: 0o755 })
   const seeded = new Store(join(directory, 'orchestrator.sqlite'))
   const sources = { github: { enabled: true, config: { repository: 'acme/widgets', cli: AGENT } }, feishu: { enabled: true, config: { cli: BOT } },
-    ...options.gitee ? { gitee: { enabled: true, config: { repository: 'acme/gadgets', cli: GITEE } } } : {} }
+    ...options.gitee ? { gitee: { enabled: true, config: { repository: 'acme/gadgets', repositories: (options.giteeRepositories ?? []).map(repository => ({ repository })), cli: GITEE } } } : {} }
   seeded.saveSettings(SettingsSchema.parse({ ...seeded.settings(), sources }))
   seed?.(seeded)
   seeded.close()

@@ -209,7 +209,12 @@ const ROUTES: readonly Route[] = [
     return sourcePage(read, 'feishu', () => feishuRead(commands, ref, read.resource, read.host.feishuPageSize()))
   }],
   ['github/', read => sourcePage(read, 'github', () => readGithub(read.host.commands.withSignal(read.signal), read.resource))],
-  ['gitee/', read => sourcePage(read, 'gitee', () => readGitee(read.host.commands.withSignal(read.signal), read.resource))],
+  ['gitee/', read => sourcePage(read, 'gitee', () => {
+    const ticket = read.ticketId ? read.host.store.tickets.get(read.ticketId) : undefined
+    const origin = ticket ? read.host.store.triggers.get(ticket.origin.triggerId) : undefined
+    const repository = typeof origin?.meta.repository === 'string' && origin.meta.repository.trim() ? origin.meta.repository : undefined
+    return readGitee(read.host.commands.withSignal(read.signal), read.resource, repository)
+  })],
   ['trigger/', async read => {
     const { host, rest, ticketId, offset, signal } = read
     if (!rest || rest.includes('/')) throw new Error('Unknown context resource')

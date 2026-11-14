@@ -265,7 +265,7 @@ export class MasterAssessor implements Assessor {
       }
       else {
         body = trigger.source === 'gitee'
-          ? await readGiteeRepositoryPath(commands, read.path!, read.resource === 'directory' ? 'directory' : 'file')
+          ? await readGiteeRepositoryPath(commands, read.path!, read.resource === 'directory' ? 'directory' : 'file', typeof trigger.meta.repository === 'string' ? trigger.meta.repository : undefined)
           : await readRepositoryPath(commands, read.path!, read.resource === 'directory' ? 'directory' : 'file')
       }
       snapshots.set(cacheKey, body)

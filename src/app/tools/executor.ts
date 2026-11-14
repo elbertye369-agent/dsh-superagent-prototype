@@ -83,18 +83,22 @@ export function executorTools(host: ExecutorToolsHost, ticket: Ticket): Tool[] {
         human_action: z.string().trim().min(1).max(1000).nullish().describe('One concrete question for a person, also with state=progress; omit to keep the pending one, null to clear it.'),
         question_for_trigger_id: z.string().optional().describe('With human_action: the human message that raised the question, which is asked where that person wrote.'),
         pr_number: z.number().int().positive().nullish().describe('The ticket\'s PR number on the selected hosting Source: its source PR, or one by the deployment account from a branch named after this ticket (DSH_SUPERAGENT_NAME).'),
-        pr_source: z.enum(['github', 'gitee']).optional().describe('PR hosting Source: github (default) or gitee. Use gitee for the independent Gitee repository.'),
+        pr_source: z.enum(['github', 'gitee']).optional().describe('PR hosting Source: github (default) or gitee. Use gitee for the independent Gitee repositories.'),
+        pr_repository: z.string().trim().regex(/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/).optional().describe('Gitee repository (owner/name) of the reported PR when pr_source is gitee; defaults to the ticket\'s own Gitee repository, or the primary watched repository.'),
         reply_to_trigger_id: z.string().optional().describe('The explicit human question this report answers; never for ordinary progress.'),
       }).strict(),
       execute: async (args, signal) => {
         const current = host.store.tickets.get(ticketId)
         if (!current || !liveTicket(current)) throw new Error('Ticket ended (PR was closed or work finished); do not resume it')
         const source = args.pr_source ?? 'github'
-        const pull = args.pr_number != null ? source === 'gitee' ? await readGiteePull(host.gitee, args.pr_number, signal)
+        const origin = source === 'gitee' ? host.gitee.triggers.get(current.origin.triggerId) : undefined
+        const repository = source === 'gitee' ? args.pr_repository ?? (origin?.source === 'gitee' && typeof origin.meta.repository === 'string' && origin.meta.repository.trim()
+          ? origin.meta.repository : host.gitee.deployment.gitee?.repository) ?? '' : ''
+        const pull = args.pr_number != null ? source === 'gitee' ? await readGiteePull(host.gitee, args.pr_number, signal, repository)
           : await readPull(host.github, args.pr_number, signal) : undefined
         // Claim the PR, record the report, and queue the relay atomically so a rejected PR claim or invalid report leaves no partial state, and a recorded report always reaches the main Session.
         return host.store.atomic(() => {
-          const refused = pull && (source === 'gitee' ? claimGiteePull(host.gitee, ticketId, pull as GiteePull)
+          const refused = pull && (source === 'gitee' ? claimGiteePull(host.gitee, ticketId, pull as GiteePull, repository)
             : claimPull(host.github, ticketId, pull as Pull))
           if (refused) throw new Error(refused)
           const report = { state: args.state, summary: args.summary, ...(args.human_action !== undefined ? { question: args.human_action } : {}),

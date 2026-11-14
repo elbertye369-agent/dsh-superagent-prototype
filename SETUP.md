@@ -25,7 +25,7 @@ command -v gitee
 grep -l -E 'id: dsh-superagent\b' "${DSH_HOME:-$HOME/.dsh}"/profiles/*/cordis.patch.yml 2>/dev/null
 ```
 
-- **Prerequisites:** Node.js 22.19+ or 24+, pnpm, git 2.32+, tmux, Python 3.8+, GitHub CLI 2.48+, the official Gitee CLI when a second Gitee repository is used, and DSH within the `engines.dsh` range of `package.json`. A missing one becomes an item of the plan, not a question. DSH also needs a model provider; if the operator has never run DSH with a model, configuring one is an operator step.
+- **Prerequisites:** Node.js 22.19+ or 24+, pnpm, git 2.32+, tmux, Python 3.8+, GitHub CLI 2.48+, the official Gitee CLI when Gitee repositories are used, and DSH within the `engines.dsh` range of `package.json`. A missing one becomes an item of the plan, not a question. DSH also needs a model provider; if the operator has never run DSH with a model, configuring one is an operator step.
 - **Operator login:** the `gh api user` result is the operator's own GitHub login, used as the recommendation in question 5.
 - **Existing profile:** a profile with a `dsh-superagent` entry is an earlier setup: ask whether to continue it, keep its configuration, and read Upgrade in `docs/006-deployment.md`.
 
@@ -35,8 +35,8 @@ Ask in this order, one per message, following the flow of work in [docs/001-doma
 
 **Sources: where requests come from.**
 
-1. **Sources.** Should the agent take requests from GitHub only, manage an independent second Gitee repository too, or also use Feishu chats? [GitHub only, unless the team uses Gitee or Feishu.]
-2. **Repository.** Which github.com repository should the agent work on, as `owner/name`? With Gitee, which second gitee.com `owner/name` should it manage independently?
+1. **Sources.** Should the agent take requests from GitHub only, manage one or more independent Gitee repositories too, or also use Feishu chats? [GitHub only, unless the team uses Gitee or Feishu.]
+2. **Repository.** Which github.com repository should the agent work on, as `owner/name`? With Gitee, which one or more gitee.com repositories should it manage independently, as `owner/name`?
 3. **Agent account.** Which GitHub user account, and optional independent Gitee account, will the agent act as? [Dedicated accounts, never the operator's own: everything the agent writes appears under these names.] They may not exist yet; creating them is an operator step.
 4. With Feishu: **which chats,** by name? The agent looks up their ids after the bot is configured.
 

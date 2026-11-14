@@ -31,7 +31,8 @@ export function declaredVariables(sources: SourceRegistry, settings?: Settings):
 export function environmentOf(input: { deployment: Deployment; sources: SourceRegistry; settings: Settings; ticket?: { id: string; name: string; directory: string }; trigger?: Trigger }): Variable[] {
   const { deployment, sources, settings, ticket, trigger } = input
   const fromGitee = trigger?.source === 'gitee'
-  const repository = fromGitee ? deployment.gitee?.repository ?? '' : deployment.repository
+  const giteeRepository = typeof trigger?.meta.repository === 'string' && trigger.meta.repository.trim() ? trigger.meta.repository : deployment.gitee?.repository
+  const repository = fromGitee ? giteeRepository ?? '' : deployment.repository
   const number = trigger && (trigger.source === 'github' || fromGitee) ? String(trigger.meta.number ?? '') : ''
   const prHead = number && trigger?.meta.isPr === true ? `refs/pull/${number}/head` : ''
   const executor: Record<string, string> = { DSH_SUPERAGENT_BLOCKED_COMMANDS: settings.executor.blockedCommands.join(' '), ...ticket ? {

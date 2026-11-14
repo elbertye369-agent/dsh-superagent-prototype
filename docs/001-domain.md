@@ -65,7 +65,7 @@ The concepts above and their rules are reusable. The Source implementations, the
 
 | Part | In this repository |
 | --- | --- |
-| Source | Feishu: live events, history recovery, polling of subscribed topics. GitHub: notifications, subscribed Issues and pull requests, CI changes, pull requests merged or closed, and repository-wide observation. Gitee: an independent repository's updated Issues/PRs, comments, subscribed Threads, and PR merge or close |
+| Source | Feishu: live events, history recovery, polling of subscribed topics. GitHub: notifications, subscribed Issues and pull requests, CI changes, pull requests merged or closed, and repository-wide observation. Gitee: updated Issues/PRs in its configured repositories, comments, subscribed Threads, and PR merge or close |
 | Policy | Assessment rules, and each Source's allowed list, its sync, its bot list and its admission table |
 | Executor | A DSH Executor Session and a directory per Ticket, in an execution environment whose variables the Executor and the Sources register |
 | Channel | Feishu topic replies, GitHub comments and review thread replies, Gitee Issue and PR comments |
